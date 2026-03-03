@@ -42,6 +42,7 @@ export default function Admin() {
   const [newUserForm, setNewUserForm] = useState({ email: '', nombre_completo: '', password: '' })
   const [creatingUser, setCreatingUser] = useState(false)
   const [newUserMsg, setNewUserMsg] = useState('')
+  const [listMsg, setListMsg] = useState('')
 
   useEffect(() => {
     fetchUsuarios(); fetchRecibos()
@@ -93,11 +94,19 @@ export default function Admin() {
   }
 
   async function viewRecibo(recibo) {
-    const { data } = await supabase.storage.from('recibos-pdf').createSignedUrl(recibo.archivo_path, 300)
-    if (data && data.signedUrl) setPdfUrl(data.signedUrl)
+    setListMsg('')
+    if (!recibo.archivo_path) { setListMsg('Este recibo no tiene archivo adjunto.'); return }
+    const { data, error } = await supabase.storage.from('recibos-pdf').createSignedUrl(recibo.archivo_path, 300)
+    if (error || !data?.signedUrl) {
+      setListMsg('No se pudo abrir el archivo. Verificá los permisos de Storage en Supabase (ver instrucciones de políticas).')
+      return
+    }
+    setPdfUrl(data.signedUrl)
   }
 
   async function downloadRecibo(recibo) {
+    setListMsg('')
+    if (!recibo.archivo_path) { setListMsg('Este recibo no tiene archivo adjunto.'); return }
     setDownloading(recibo.id)
     const { data, error } = await supabase.storage.from('recibos-pdf').download(recibo.archivo_path)
     if (!error && data) {
@@ -105,6 +114,8 @@ export default function Admin() {
       const a = document.createElement('a')
       a.href = url; a.download = recibo.nombre_archivo || 'recibo.pdf'; a.click()
       URL.revokeObjectURL(url)
+    } else {
+      setListMsg('No se pudo descargar el archivo. Verificá los permisos de Storage en Supabase (ver instrucciones de políticas).')
     }
     setDownloading(null)
   }
@@ -122,13 +133,14 @@ export default function Admin() {
       archivo_path = path
       nombre_archivo = newReciboFile.name
     }
-    const { error } = await supabase.from('recibos').update({
+    const { data: updated, error } = await supabase.from('recibos').update({
       fecha: editReciboForm.fecha,
       descripcion: editReciboForm.descripcion || 'Liquidacion de haberes',
       monto: editReciboForm.monto ? parseFloat(editReciboForm.monto) : null,
       archivo_path, nombre_archivo,
-    }).eq('id', r.id)
+    }).eq('id', r.id).select()
     if (error) setReciboMsg('Error: ' + error.message)
+    else if (!updated || updated.length === 0) setReciboMsg('No se guardaron los cambios. Falta la política RLS de UPDATE para admin en Supabase (ver instrucciones de políticas).')
     else { setEditingRecibo(null); setNewReciboFile(null); setReciboMsg(''); fetchRecibos() }
     setSavingRecibo(false)
   }
@@ -345,7 +357,13 @@ export default function Admin() {
               </div>
             </div>
 
-            {recibosFiltrados.length === 0 ? (
+            {listMsg && (
+              <div style={{marginBottom:'12px',padding:'10px 14px',borderRadius:'3px',fontSize:'13px',background:'#fdf2f2',color:'#b53a2f',borderLeft:'3px solid #b53a2f'}}>
+                {listMsg}
+              </div>
+            )}
+
+          {recibosFiltrados.length === 0 ? (
               <p style={{color:'#a89070'}}>No hay recibos para los filtros seleccionados.</p>
             ) : isMobile ? (
               /* Vista mobile: tarjetas */
@@ -372,6 +390,7 @@ export default function Admin() {
                         <div style={{display:'flex',flexDirection:'column',gap:'3px'}}>
                           <label style={lbl}>Reemplazar PDF (opcional)</label>
                           <input type="file" accept=".pdf" onChange={e => setNewReciboFile(e.target.files[0])} style={{...inp,padding:'7px 10px',fontSize:'12px'}} />
+                          {r.nombre_archivo && !newReciboFile && <span style={{fontSize:'11px',color:'#8a7560',marginTop:'3px'}}>Actual: {r.nombre_archivo}</span>}
                         </div>
                         {reciboMsg && <p style={{margin:0,fontSize:'12px',color:'#b53a2f'}}>{reciboMsg}</p>}
                         <div style={{display:'flex',gap:'6px'}}>
@@ -433,6 +452,7 @@ export default function Admin() {
                         <div style={{display:'flex',flexDirection:'column',gap:'3px',flex:2,minWidth:'200px'}}>
                           <label style={lbl}>Reemplazar PDF (opcional)</label>
                           <input type="file" accept=".pdf" onChange={e => setNewReciboFile(e.target.files[0])} style={{...inp,width:'auto',padding:'7px 10px',fontSize:'12px'}} />
+                          {r.nombre_archivo && !newReciboFile && <span style={{fontSize:'11px',color:'#8a7560',marginTop:'3px'}}>Actual: {r.nombre_archivo}</span>}
                         </div>
                       </div>
                       {reciboMsg && <p style={{margin:'0 0 8px',fontSize:'12px',color:'#b53a2f'}}>{reciboMsg}</p>}
