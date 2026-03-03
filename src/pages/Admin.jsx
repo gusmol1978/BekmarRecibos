@@ -46,6 +46,7 @@ export default function Admin() {
   const [listMsg, setListMsg] = useState('')
   const [resetPassId, setResetPassId] = useState(null)   // id del empleado con modal abierto
   const [resetPassMsg, setResetPassMsg] = useState({})   // {userId: msg}
+  const [empleadosTab, setEmpleadosTab] = useState('activos') // 'activos' | 'inactivos'
 
   // Subida masiva
   const [subirMode, setSubirMode] = useState('individual') // 'individual' | 'masiva'
@@ -225,10 +226,13 @@ export default function Admin() {
 
   // ── SUBIDA MASIVA ──────────────────────────────────────────────
 
+  const usuariosActivos   = usuarios.filter(u => u.activo !== false)
+  const usuariosInactivos = usuarios.filter(u => u.activo === false)
+
   function downloadPlantilla() {
     const wsData = [
       ['email', 'nombre_completo', 'monto', 'descripcion', 'archivo'],
-      ...usuarios.map(u => [u.email, u.nombre_completo || '', '', 'Liquidacion de haberes', ''])
+      ...usuariosActivos.map(u => [u.email, u.nombre_completo || '', '', 'Liquidacion de haberes', ''])
     ]
     const ws = XLSX.utils.aoa_to_sheet(wsData)
     // Ancho de columnas
@@ -424,7 +428,7 @@ export default function Admin() {
         <div style={{borderBottom:'1px solid #e2d9cc',display:'flex',gap:'0px',marginTop:'20px'}}>
           <button onClick={() => setActiveTab('subir')} style={tabStyle('subir')}>Subir</button>
           <button onClick={() => setActiveTab('lista')} style={tabStyle('lista')}>Recibos ({recibosFiltrados.length})</button>
-          <button onClick={() => setActiveTab('empleados')} style={tabStyle('empleados')}>Empleados ({usuarios.length})</button>
+          <button onClick={() => setActiveTab('empleados')} style={tabStyle('empleados')}>Empleados ({usuariosActivos.length})</button>
         </div>
 
         {/* TAB: SUBIR */}
@@ -769,6 +773,22 @@ export default function Admin() {
               >{showNewUser ? 'Cancelar' : '+ Nuevo Empleado'}</button>
             </div>
 
+            {/* Sub-tabs Activos / Sin acceso */}
+            <div style={{display:'flex',gap:'0',marginBottom:'16px',borderBottom:'1px solid #e2d9cc'}}>
+              <button onClick={() => setEmpleadosTab('activos')}
+                style={{padding:'7px 18px',fontSize:'13px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',
+                  color: empleadosTab==='activos' ? '#2c1f0e' : '#a89070',
+                  borderBottom: empleadosTab==='activos' ? '2px solid #c8a96e' : '2px solid transparent'}}>
+                Activos ({usuariosActivos.length})
+              </button>
+              <button onClick={() => setEmpleadosTab('inactivos')}
+                style={{padding:'7px 18px',fontSize:'13px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',
+                  color: empleadosTab==='inactivos' ? '#2c1f0e' : '#a89070',
+                  borderBottom: empleadosTab==='inactivos' ? '2px solid #c8a96e' : '2px solid transparent'}}>
+                Sin acceso ({usuariosInactivos.length})
+              </button>
+            </div>
+
             {/* Formulario nuevo empleado */}
             {showNewUser && (
               <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
@@ -827,7 +847,7 @@ export default function Admin() {
 
             {editMsg && <p style={{margin:'0 0 14px',padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:editMsg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:editMsg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(editMsg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{editMsg.startsWith('OK')?editMsg.slice(3):editMsg}</p>}
             <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-              {usuarios.map(u => (
+              {(empleadosTab === 'activos' ? usuariosActivos : usuariosInactivos).map(u => (
                 <div key={u.id} style={{background:'#fff',borderRadius:'4px',padding:'16px 20px',border:'1px solid #ede6d8',opacity: u.activo === false ? 0.65 : 1}}>
                   {editingUser === u.id ? (
                     <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
