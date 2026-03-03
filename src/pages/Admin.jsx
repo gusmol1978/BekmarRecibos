@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
 import logo from '../LogoBekmar.png'
+import * as XLSX from 'xlsx'
 
 // Cliente sin persistencia de sesion, solo para crear usuarios sin desloguear al admin
 const supabaseNoSession = createClient(
@@ -213,39 +214,42 @@ export default function Admin() {
   // ── SUBIDA MASIVA ──────────────────────────────────────────────
 
   function downloadPlantilla() {
-    const header = 'email,nombre_completo,monto,descripcion,archivo'
-    const rows = usuarios.map(u => {
-      const nombre = (u.nombre_completo || '').replace(/,/g, ' ')
-      return `${u.email},${nombre},,Liquidacion de haberes,`
-    })
-    const csv = '\uFEFF' + [header, ...rows].join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `plantilla_recibos${bulkPeriodo ? '_' + bulkPeriodo : ''}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const wsData = [
+      ['email', 'nombre_completo', 'monto', 'descripcion', 'archivo'],
+      ...usuarios.map(u => [u.email, u.nombre_completo || '', '', 'Liquidacion de haberes', ''])
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(wsData)
+    // Ancho de columnas
+    ws['!cols'] = [{ wch: 32 }, { wch: 26 }, { wch: 12 }, { wch: 28 }, { wch: 22 }]
+    // Estilo cabecera (negrita) — requiere SheetJS Pro para estilos avanzados, pero el ancho ya ayuda
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Recibos')
+    XLSX.writeFile(wb, `plantilla_recibos${bulkPeriodo ? '_' + bulkPeriodo : ''}.xlsx`)
   }
 
-  function parseCsvFile(file) {
+  function parseExcelFile(file) {
     const reader = new FileReader()
     reader.onload = e => {
-      const text = e.target.result.replace(/^\uFEFF/, '') // quitar BOM
-      const lines = text.split(/\r?\n/).filter(l => l.trim())
-      if (lines.length < 2) { setBulkMsg('El CSV no tiene datos.'); return }
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
-      const rows = lines.slice(1).map(line => {
-        // parse simple CSV (no commas inside fields)
-        const vals = line.split(',')
-        const obj = {}
-        headers.forEach((h, i) => obj[h] = (vals[i] || '').trim())
-        return obj
-      }).filter(r => r.email)
-      setBulkCsvRows(rows)
-      setBulkMsg('')
+      try {
+        const data = new Uint8Array(e.target.result)
+        const wb = XLSX.read(data, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+        if (rawRows.length === 0) { setBulkMsg('El archivo Excel no tiene datos.'); return }
+        // Normalizar nombres de columnas a minúsculas sin espacios
+        const rows = rawRows.map(row => {
+          const obj = {}
+          Object.keys(row).forEach(k => { obj[k.toLowerCase().trim()] = String(row[k] ?? '').trim() })
+          return obj
+        }).filter(r => r.email)
+        if (rows.length === 0) { setBulkMsg('No se encontró la columna "email" en el archivo.'); return }
+        setBulkCsvRows(rows)
+        setBulkMsg('')
+      } catch (err) {
+        setBulkMsg('Error al leer el archivo: ' + err.message)
+      }
     }
-    reader.readAsText(file, 'UTF-8')
+    reader.readAsArrayBuffer(file)
   }
 
   function handleBulkPdfs(files) {
@@ -484,14 +488,14 @@ export default function Admin() {
 
                 {/* Plantilla CSV */}
                 <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
-                  <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'6px'}}>2. Descargá la plantilla CSV</div>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'6px'}}>2. Descargá la plantilla Excel</div>
                   <p style={{color:'#8a7560',fontSize:'13px',margin:'0 0 14px'}}>Tiene todos los empleados cargados. Completá la columna <strong>monto</strong> y <strong>archivo</strong> (nombre del PDF de cada empleado, ej: bonilla.pdf).</p>
                   <button onClick={downloadPlantilla} style={{background:'transparent',border:'1.5px solid #0f1f3d',borderRadius:'3px',padding:'9px 18px',fontSize:'13px',color:'#0f1f3d',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',fontWeight:500}}>
-                    ↓ Descargar plantilla CSV
+                    ↓ Descargar plantilla Excel
                   </button>
-                  <div style={{marginTop:'10px',background:'#f7f4ef',borderRadius:'3px',padding:'10px 14px',fontSize:'11px',color:'#8a7560',fontFamily:'monospace'}}>
-                    email,nombre_completo,monto,descripcion,archivo<br/>
-                    alvaro@gmail.com,Alvaro Bonilla,15000,,bonilla.pdf
+                  <div style={{marginTop:'10px',background:'#f7f4ef',borderRadius:'3px',padding:'10px 14px',fontSize:'11px',color:'#8a7560'}}>
+                    <strong>Columnas:</strong> email · nombre_completo · monto · descripcion · archivo<br/>
+                    <span style={{fontFamily:'monospace'}}>alvaro@gmail.com | Alvaro Bonilla | 15000 | Liquidacion de haberes | bonilla.pdf</span>
                   </div>
                 </div>
 
@@ -500,9 +504,9 @@ export default function Admin() {
                   <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'14px'}}>3. Cargá el CSV completado y los PDFs</div>
                   <div style={{display:'flex',gap:'16px',flexWrap:'wrap'}}>
                     <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'220px'}}>
-                      <label style={lbl}>Archivo CSV completado</label>
-                      <input type="file" accept=".csv" onChange={e => e.target.files[0] && parseCsvFile(e.target.files[0])} style={inp} />
-                      {bulkCsvRows.length > 0 && <span style={{fontSize:'12px',color:'#2a6a2a'}}>✓ {bulkCsvRows.length} empleados cargados del CSV</span>}
+                      <label style={lbl}>Archivo Excel completado (.xlsx)</label>
+                      <input type="file" accept=".xlsx,.xls" onChange={e => e.target.files[0] && parseExcelFile(e.target.files[0])} style={inp} />
+                      {bulkCsvRows.length > 0 && <span style={{fontSize:'12px',color:'#2a6a2a'}}>✓ {bulkCsvRows.length} empleados cargados del Excel</span>}
                     </div>
                     <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'220px'}}>
                       <label style={lbl}>Archivos PDF (todos juntos)</label>
