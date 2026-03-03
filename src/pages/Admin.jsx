@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
+import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
 import logo from '../LogoBekmar.png'
+
+// Cliente sin persistencia de sesion, solo para crear usuarios sin desloguear al admin
+const supabaseNoSession = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+)
 
 export default function Admin() {
   const { user, profile, signOut } = useAuth()
@@ -150,7 +158,7 @@ export default function Admin() {
     if (!newUserForm.email) return setNewUserMsg('Ingresa un email')
     if (!newUserForm.password || newUserForm.password.length < 6) return setNewUserMsg('La contraseña debe tener al menos 6 caracteres')
     setCreatingUser(true); setNewUserMsg('')
-    const { data, error } = await supabase.auth.signUp({
+    const { data, error } = await supabaseNoSession.auth.signUp({
       email: newUserForm.email,
       password: newUserForm.password,
       options: { data: { nombre_completo: newUserForm.nombre_completo } }
