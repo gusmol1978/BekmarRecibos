@@ -44,6 +44,17 @@ export default function Admin() {
   const [newUserMsg, setNewUserMsg] = useState('')
   const [listMsg, setListMsg] = useState('')
 
+  // Subida masiva
+  const [subirMode, setSubirMode] = useState('individual') // 'individual' | 'masiva'
+  const [bulkPeriodo, setBulkPeriodo] = useState('')       // YYYY-MM
+  const [bulkDescripcion, setBulkDescripcion] = useState('Liquidacion de haberes')
+  const [bulkCsvRows, setBulkCsvRows] = useState([])       // [{email, nombre_completo, monto, descripcion, archivo}]
+  const [bulkPdfMap, setBulkPdfMap] = useState({})         // {filename: File}
+  const [bulkUploading, setBulkUploading] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState(null)  // {current, total}
+  const [bulkResults, setBulkResults] = useState([])       // [{nombre, email, archivo, status, msg}]
+  const [bulkMsg, setBulkMsg] = useState('')
+
   useEffect(() => {
     fetchUsuarios(); fetchRecibos()
     const handler = () => setIsMobile(window.innerWidth < 700)
@@ -199,6 +210,110 @@ export default function Admin() {
     fetchUsuarios()
   }
 
+  // ── SUBIDA MASIVA ──────────────────────────────────────────────
+
+  function downloadPlantilla() {
+    const header = 'email,nombre_completo,monto,descripcion,archivo'
+    const rows = usuarios.map(u => {
+      const nombre = (u.nombre_completo || '').replace(/,/g, ' ')
+      return `${u.email},${nombre},,Liquidacion de haberes,`
+    })
+    const csv = '\uFEFF' + [header, ...rows].join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `plantilla_recibos${bulkPeriodo ? '_' + bulkPeriodo : ''}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function parseCsvFile(file) {
+    const reader = new FileReader()
+    reader.onload = e => {
+      const text = e.target.result.replace(/^\uFEFF/, '') // quitar BOM
+      const lines = text.split(/\r?\n/).filter(l => l.trim())
+      if (lines.length < 2) { setBulkMsg('El CSV no tiene datos.'); return }
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
+      const rows = lines.slice(1).map(line => {
+        // parse simple CSV (no commas inside fields)
+        const vals = line.split(',')
+        const obj = {}
+        headers.forEach((h, i) => obj[h] = (vals[i] || '').trim())
+        return obj
+      }).filter(r => r.email)
+      setBulkCsvRows(rows)
+      setBulkMsg('')
+    }
+    reader.readAsText(file, 'UTF-8')
+  }
+
+  function handleBulkPdfs(files) {
+    const map = {}
+    Array.from(files).forEach(f => { map[f.name] = f })
+    setBulkPdfMap(map)
+  }
+
+  async function handleBulkUpload() {
+    if (!bulkPeriodo) return setBulkMsg('Seleccioná el período (mes y año)')
+    if (bulkCsvRows.length === 0) return setBulkMsg('Cargá el archivo CSV primero')
+    const fecha = bulkPeriodo + '-01'
+    setBulkUploading(true); setBulkResults([]); setBulkMsg('')
+    const results = []
+    for (let i = 0; i < bulkCsvRows.length; i++) {
+      const row = bulkCsvRows[i]
+      setBulkProgress({ current: i + 1, total: bulkCsvRows.length })
+      const emp = usuarios.find(u => u.email.toLowerCase() === (row.email || '').toLowerCase())
+      if (!emp) {
+        results.push({ nombre: row.nombre_completo || row.email, email: row.email, archivo: row.archivo, status: 'error', msg: 'Empleado no encontrado en el sistema' })
+        continue
+      }
+      const pdfFile = bulkPdfMap[row.archivo]
+      if (!pdfFile) {
+        results.push({ nombre: emp.nombre_completo || emp.email, email: emp.email, archivo: row.archivo, status: 'error', msg: `Archivo "${row.archivo}" no seleccionado` })
+        continue
+      }
+      // Renombrar: bonilla.pdf → bonilla_2026-03.pdf
+      const ext = pdfFile.name.split('.').pop()
+      const base = pdfFile.name.replace(/\.[^/.]+$/, '')
+      const storedName = `${base}_${bulkPeriodo}.${ext}`
+      const path = `${emp.id}/${fecha}-${Date.now()}-${i}.${ext}`
+      const { error: upErr } = await supabase.storage.from('recibos-pdf').upload(path, pdfFile, { contentType: 'application/pdf' })
+      if (upErr) {
+        results.push({ nombre: emp.nombre_completo || emp.email, email: emp.email, archivo: row.archivo, status: 'error', msg: upErr.message })
+        continue
+      }
+      const desc = row.descripcion || bulkDescripcion || 'Liquidacion de haberes'
+      const { error: dbErr } = await supabase.from('recibos').insert({
+        user_id: emp.id, fecha,
+        descripcion: desc,
+        monto: row.monto ? parseFloat(row.monto) : null,
+        archivo_path: path, nombre_archivo: storedName, subido_por: user.id
+      })
+      if (dbErr) {
+        await supabase.storage.from('recibos-pdf').remove([path])
+        results.push({ nombre: emp.nombre_completo || emp.email, email: emp.email, archivo: row.archivo, status: 'error', msg: dbErr.message })
+      } else {
+        results.push({ nombre: emp.nombre_completo || emp.email, email: emp.email, archivo: storedName, status: 'ok', msg: 'Subido correctamente' })
+      }
+    }
+    setBulkResults(results)
+    setBulkProgress(null)
+    setBulkUploading(false)
+    fetchRecibos()
+  }
+
+  // Preview de la carga masiva (computed)
+  const bulkPreview = bulkCsvRows.map(row => {
+    const emp = usuarios.find(u => u.email.toLowerCase() === (row.email || '').toLowerCase())
+    const pdfOk = !!bulkPdfMap[row.archivo]
+    const empOk = !!emp
+    return { ...row, nombre: emp?.nombre_completo || row.nombre_completo || row.email, empOk, pdfOk, ready: empOk && pdfOk && !!row.archivo }
+  })
+  const bulkReadyCount = bulkPreview.filter(r => r.ready).length
+
+  // ───────────────────────────────────────────────────────────────
+
   function toggleSort(col) {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortBy(col); setSortDir('asc') }
@@ -298,37 +413,180 @@ export default function Admin() {
 
         {/* TAB: SUBIR */}
         {activeTab === 'subir' && (
-          <div style={{maxWidth:'560px',marginTop:'28px'}}>
-            <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'22px',fontWeight:400,color:'#2c1f0e',margin:'0 0 20px'}}>Subir Recibo de Sueldo</h2>
-            <form onSubmit={handleUpload} style={{display:'flex',flexDirection:'column',gap:'16px'}}>
-              <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
-                <label style={lbl}>Empleado</label>
-                <select value={form.user_id} onChange={e => setForm({...form,user_id:e.target.value})} required style={inp}>
-                  <option value="">-- Seleccionar empleado --</option>
-                  {usuarios.map(u => <option key={u.id} value={u.id}>{u.nombre_completo || u.email}</option>)}
-                </select>
+          <div style={{marginTop:'28px'}}>
+            {/* Toggle Individual / Masiva */}
+            <div style={{display:'flex',gap:'0',marginBottom:'28px',background:'#ede6d8',borderRadius:'4px',padding:'3px',width:'fit-content'}}>
+              {['individual','masiva'].map(mode => (
+                <button key={mode} onClick={() => { setSubirMode(mode); setMsg(''); setBulkMsg(''); setBulkResults([]); setBulkProgress(null) }}
+                  style={{padding:'7px 20px',fontSize:'13px',fontWeight:500,cursor:'pointer',border:'none',borderRadius:'3px',fontFamily:'"DM Sans",sans-serif',
+                    background: subirMode === mode ? '#0f1f3d' : 'transparent',
+                    color: subirMode === mode ? '#fff' : '#8a7560'}}>
+                  {mode === 'individual' ? 'Individual' : 'Masiva'}
+                </button>
+              ))}
+            </div>
+
+            {/* MODO INDIVIDUAL */}
+            {subirMode === 'individual' && (
+              <div style={{maxWidth:'560px'}}>
+                <form onSubmit={handleUpload} style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+                  <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
+                    <label style={lbl}>Empleado</label>
+                    <select value={form.user_id} onChange={e => setForm({...form,user_id:e.target.value})} required style={inp}>
+                      <option value="">-- Seleccionar empleado --</option>
+                      {usuarios.map(u => <option key={u.id} value={u.id}>{u.nombre_completo || u.email}</option>)}
+                    </select>
+                  </div>
+                  <div style={{display:'flex',gap:'12px',flexWrap: isMobile ? 'wrap' : 'nowrap'}}>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'140px'}}>
+                      <label style={lbl}>Fecha del Recibo</label>
+                      <input type="date" value={form.fecha} onChange={e => setForm({...form,fecha:e.target.value})} required style={inp} />
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'140px'}}>
+                      <label style={lbl}>Monto (opcional)</label>
+                      <input type="number" step="0.01" value={form.monto} onChange={e => setForm({...form,monto:e.target.value})} placeholder="0.00" style={inp} />
+                    </div>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
+                    <label style={lbl}>Descripcion (opcional)</label>
+                    <input type="text" value={form.descripcion} onChange={e => setForm({...form,descripcion:e.target.value})} placeholder="Liquidacion de haberes" style={inp} />
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
+                    <label style={lbl}>Archivo PDF</label>
+                    <input type="file" accept=".pdf" onChange={e => setFile(e.target.files[0])} required style={inp} />
+                  </div>
+                  {msg && <p style={{margin:0,padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:msg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:msg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(msg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{msg.startsWith('OK')?msg.slice(3):msg}</p>}
+                  <button type="submit" disabled={uploading} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'13px',fontSize:'14px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:uploading?0.7:1}}>{uploading?'Subiendo...':'Subir Recibo'}</button>
+                </form>
               </div>
-              <div style={{display:'flex',gap:'12px',flexWrap: isMobile ? 'wrap' : 'nowrap'}}>
-                <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'140px'}}>
-                  <label style={lbl}>Fecha del Recibo</label>
-                  <input type="date" value={form.fecha} onChange={e => setForm({...form,fecha:e.target.value})} required style={inp} />
+            )}
+
+            {/* MODO MASIVA */}
+            {subirMode === 'masiva' && (
+              <div style={{maxWidth:'860px'}}>
+                <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'22px',fontWeight:400,color:'#2c1f0e',margin:'0 0 6px'}}>Subida Masiva de Recibos</h2>
+                <p style={{color:'#8a7560',fontSize:'13px',margin:'0 0 24px'}}>Subí los recibos de todos los empleados para un mismo período en un solo paso.</p>
+
+                {/* Configuración del período */}
+                <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'14px'}}>1. Configurá el período</div>
+                  <div style={{display:'flex',gap:'16px',flexWrap:'wrap',alignItems:'flex-end'}}>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',minWidth:'180px'}}>
+                      <label style={lbl}>Período (mes y año)</label>
+                      <input type="month" value={bulkPeriodo} onChange={e => setBulkPeriodo(e.target.value)} style={inp} />
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'220px'}}>
+                      <label style={lbl}>Descripcion (para todos)</label>
+                      <input type="text" value={bulkDescripcion} onChange={e => setBulkDescripcion(e.target.value)} placeholder="Liquidacion de haberes" style={inp} />
+                    </div>
+                  </div>
                 </div>
-                <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'140px'}}>
-                  <label style={lbl}>Monto (opcional)</label>
-                  <input type="number" step="0.01" value={form.monto} onChange={e => setForm({...form,monto:e.target.value})} placeholder="0.00" style={inp} />
+
+                {/* Plantilla CSV */}
+                <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'6px'}}>2. Descargá la plantilla CSV</div>
+                  <p style={{color:'#8a7560',fontSize:'13px',margin:'0 0 14px'}}>Tiene todos los empleados cargados. Completá la columna <strong>monto</strong> y <strong>archivo</strong> (nombre del PDF de cada empleado, ej: bonilla.pdf).</p>
+                  <button onClick={downloadPlantilla} style={{background:'transparent',border:'1.5px solid #0f1f3d',borderRadius:'3px',padding:'9px 18px',fontSize:'13px',color:'#0f1f3d',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',fontWeight:500}}>
+                    ↓ Descargar plantilla CSV
+                  </button>
+                  <div style={{marginTop:'10px',background:'#f7f4ef',borderRadius:'3px',padding:'10px 14px',fontSize:'11px',color:'#8a7560',fontFamily:'monospace'}}>
+                    email,nombre_completo,monto,descripcion,archivo<br/>
+                    alvaro@gmail.com,Alvaro Bonilla,15000,,bonilla.pdf
+                  </div>
                 </div>
+
+                {/* Cargar archivos */}
+                <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'14px'}}>3. Cargá el CSV completado y los PDFs</div>
+                  <div style={{display:'flex',gap:'16px',flexWrap:'wrap'}}>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'220px'}}>
+                      <label style={lbl}>Archivo CSV completado</label>
+                      <input type="file" accept=".csv" onChange={e => e.target.files[0] && parseCsvFile(e.target.files[0])} style={inp} />
+                      {bulkCsvRows.length > 0 && <span style={{fontSize:'12px',color:'#2a6a2a'}}>✓ {bulkCsvRows.length} empleados cargados del CSV</span>}
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',gap:'5px',flex:1,minWidth:'220px'}}>
+                      <label style={lbl}>Archivos PDF (todos juntos)</label>
+                      <input type="file" accept=".pdf" multiple onChange={e => handleBulkPdfs(e.target.files)} style={inp} />
+                      {Object.keys(bulkPdfMap).length > 0 && <span style={{fontSize:'12px',color:'#2a6a2a'}}>✓ {Object.keys(bulkPdfMap).length} PDFs seleccionados</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preview */}
+                {bulkPreview.length > 0 && bulkResults.length === 0 && (
+                  <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',overflow:'hidden',marginBottom:'20px'}}>
+                    <div style={{padding:'12px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',display:'grid',gridTemplateColumns:'1fr 1fr 100px 80px',gap:'12px'}}>
+                      {['Empleado','Archivo PDF','Monto','Estado'].map(h => (
+                        <div key={h} style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>{h}</div>
+                      ))}
+                    </div>
+                    {bulkPreview.map((row, i) => (
+                      <div key={i} style={{padding:'11px 20px',borderBottom:i < bulkPreview.length-1?'1px solid #f3ede3':'none',display:'grid',gridTemplateColumns:'1fr 1fr 100px 80px',gap:'12px',alignItems:'center',background:i%2===0?'#fff':'#fdfbf8'}}>
+                        <div>
+                          <div style={{fontSize:'13px',fontWeight:600,color:'#2c1f0e'}}>{row.nombre}</div>
+                          <div style={{fontSize:'11px',color:'#a89070'}}>{row.email}</div>
+                        </div>
+                        <div style={{fontSize:'13px',color: row.pdfOk ? '#5c4a32' : '#b53a2f'}}>
+                          {row.archivo || <span style={{color:'#b53a2f',fontStyle:'italic'}}>Sin archivo</span>}
+                          {row.archivo && !row.pdfOk && <span style={{fontSize:'11px',color:'#b53a2f',display:'block'}}>No encontrado</span>}
+                          {row.pdfOk && <span style={{fontSize:'11px',color:'#2a6a2a',display:'block'}}>→ {row.archivo?.replace(/\.[^/.]+$/, '')}_{bulkPeriodo}.{row.archivo?.split('.').pop()}</span>}
+                        </div>
+                        <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600}}>{row.monto ? '$ '+parseFloat(row.monto).toLocaleString('es-AR',{minimumFractionDigits:2}) : '—'}</div>
+                        <div style={{fontSize:'12px',fontWeight:600,color: row.ready ? '#2a6a2a' : '#b53a2f'}}>
+                          {row.ready ? '✓ Listo' : !row.empOk ? '✗ Sin usuario' : !row.archivo ? '✗ Sin archivo' : '✗ PDF faltante'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {bulkMsg && <p style={{margin:'0 0 16px',padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:'#fdf2f2',color:'#b53a2f',borderLeft:'3px solid #b53a2f'}}>{bulkMsg}</p>}
+
+                {/* Progreso */}
+                {bulkUploading && bulkProgress && (
+                  <div style={{marginBottom:'16px'}}>
+                    <div style={{fontSize:'13px',color:'#5c4a32',marginBottom:'6px'}}>Subiendo {bulkProgress.current} de {bulkProgress.total}...</div>
+                    <div style={{background:'#ede6d8',borderRadius:'99px',height:'6px',overflow:'hidden'}}>
+                      <div style={{background:'#0f1f3d',height:'100%',borderRadius:'99px',width:`${(bulkProgress.current/bulkProgress.total)*100}%`,transition:'width 0.3s'}} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Resultados */}
+                {bulkResults.length > 0 && (
+                  <div style={{marginBottom:'20px'}}>
+                    <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',overflow:'hidden',marginBottom:'12px'}}>
+                      <div style={{padding:'12px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',fontSize:'13px',fontWeight:600,color:'#2c1f0e'}}>
+                        Resultado: {bulkResults.filter(r=>r.status==='ok').length} ok · {bulkResults.filter(r=>r.status==='error').length} con error
+                      </div>
+                      {bulkResults.map((r, i) => (
+                        <div key={i} style={{padding:'10px 20px',borderBottom:i<bulkResults.length-1?'1px solid #f3ede3':'none',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px',background:i%2===0?'#fff':'#fdfbf8'}}>
+                          <div>
+                            <span style={{fontSize:'13px',fontWeight:600,color:'#2c1f0e'}}>{r.nombre}</span>
+                            <span style={{fontSize:'12px',color:'#a89070',marginLeft:'8px'}}>{r.archivo}</span>
+                          </div>
+                          <span style={{fontSize:'12px',fontWeight:600,color:r.status==='ok'?'#2a6a2a':'#b53a2f',flexShrink:0}}>
+                            {r.status==='ok' ? '✓ ' + r.msg : '✗ ' + r.msg}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => { setBulkResults([]); setBulkCsvRows([]); setBulkPdfMap({}); setBulkPeriodo(''); setBulkProgress(null) }}
+                      style={{background:'transparent',border:'1.5px solid #0f1f3d',borderRadius:'3px',padding:'8px 18px',fontSize:'13px',color:'#0f1f3d',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                      Subir otro período
+                    </button>
+                  </div>
+                )}
+
+                {/* Botón subir */}
+                {bulkResults.length === 0 && (
+                  <button onClick={handleBulkUpload} disabled={bulkUploading || bulkReadyCount === 0}
+                    style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'13px 28px',fontSize:'14px',fontWeight:500,cursor:bulkReadyCount===0?'not-allowed':'pointer',fontFamily:'"DM Sans",sans-serif',opacity:bulkUploading||bulkReadyCount===0?0.5:1}}>
+                    {bulkUploading ? 'Subiendo...' : `Subir ${bulkReadyCount} recibo${bulkReadyCount !== 1 ? 's' : ''}`}
+                  </button>
+                )}
               </div>
-              <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
-                <label style={lbl}>Descripcion (opcional)</label>
-                <input type="text" value={form.descripcion} onChange={e => setForm({...form,descripcion:e.target.value})} placeholder="Liquidacion de haberes" style={inp} />
-              </div>
-              <div style={{display:'flex',flexDirection:'column',gap:'5px'}}>
-                <label style={lbl}>Archivo PDF</label>
-                <input type="file" accept=".pdf" onChange={e => setFile(e.target.files[0])} required style={inp} />
-              </div>
-              {msg && <p style={{margin:0,padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:msg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:msg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(msg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{msg.startsWith('OK')?msg.slice(3):msg}</p>}
-              <button type="submit" disabled={uploading} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'13px',fontSize:'14px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:uploading?0.7:1}}>{uploading?'Subiendo...':'Subir Recibo'}</button>
-            </form>
+            )}
           </div>
         )}
 
