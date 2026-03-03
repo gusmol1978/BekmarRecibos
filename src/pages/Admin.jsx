@@ -160,9 +160,14 @@ export default function Admin() {
       setCreatingUser(false)
       return
     }
-    // Si el usuario fue creado, actualizar nombre_completo en profiles
-    if (data.user && newUserForm.nombre_completo) {
-      // Esperar un momento para que el trigger cree el perfil
+    // Detectar si el email ya existia (Supabase devuelve identities vacío en ese caso)
+    if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
+      setNewUserMsg('Error: Ya existe un usuario registrado con ese email')
+      setCreatingUser(false)
+      return
+    }
+    // Actualizar nombre_completo en profiles
+    if (newUserForm.nombre_completo) {
       await new Promise(res => setTimeout(res, 800))
       await supabase.from('profiles')
         .update({ nombre_completo: newUserForm.nombre_completo })
@@ -532,6 +537,10 @@ export default function Admin() {
                         <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
                           <label style={lbl}>Telefono</label>
                           <input value={editForm.telefono} onChange={e => setEditForm({...editForm,telefono:e.target.value})} style={{...inp,width:'auto'}} placeholder="+598 9X XXX XXX" />
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'200px'}}>
+                          <label style={lbl}>Email (no editable)</label>
+                          <input value={u.email} disabled style={{...inp,width:'auto',background:'#f0ece6',color:'#a89070',cursor:'not-allowed'}} />
                         </div>
                       </div>
                       <div style={{display:'flex',gap:'8px'}}>
