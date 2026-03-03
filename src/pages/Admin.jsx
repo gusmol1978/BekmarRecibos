@@ -44,6 +44,8 @@ export default function Admin() {
   const [creatingUser, setCreatingUser] = useState(false)
   const [newUserMsg, setNewUserMsg] = useState('')
   const [listMsg, setListMsg] = useState('')
+  const [resetPassId, setResetPassId] = useState(null)   // id del empleado con modal abierto
+  const [resetPassMsg, setResetPassMsg] = useState({})   // {userId: msg}
 
   // Subida masiva
   const [subirMode, setSubirMode] = useState('individual') // 'individual' | 'masiva'
@@ -209,6 +211,16 @@ export default function Admin() {
     setNewUserForm({ email: '', nombre_completo: '', password: '' })
     setCreatingUser(false)
     fetchUsuarios()
+  }
+
+  async function sendResetPassword(u) {
+    setResetPassMsg(prev => ({ ...prev, [u.id]: 'enviando' }))
+    const { error } = await supabase.auth.resetPasswordForEmail(u.email, {
+      redirectTo: window.location.origin + '/reset-password'
+    })
+    if (error) setResetPassMsg(prev => ({ ...prev, [u.id]: 'Error: ' + error.message }))
+    else setResetPassMsg(prev => ({ ...prev, [u.id]: 'OK Email enviado a ' + u.email }))
+    setResetPassId(null)
   }
 
   // ── SUBIDA MASIVA ──────────────────────────────────────────────
@@ -859,6 +871,23 @@ export default function Admin() {
                           onClick={() => { setEditingUser(u.id); setEditForm({ nombre_completo: u.nombre_completo || '', telefono: u.telefono || '' }); setEditMsg('') }}
                           style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 14px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
                         >Editar</button>
+                        {resetPassId === u.id ? (
+                          <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+                            <span style={{fontSize:'12px',color:'#5c4a32'}}>¿Enviar reset a {u.email}?</span>
+                            <button onClick={() => sendResetPassword(u)} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'5px 10px',fontSize:'11px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Sí, enviar</button>
+                            <button onClick={() => setResetPassId(null)} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'5px 8px',fontSize:'11px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>No</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setResetPassId(u.id); setResetPassMsg(prev => ({...prev, [u.id]: ''})) }}
+                            style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 14px',fontSize:'12px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
+                          >Reset pass</button>
+                        )}
+                        {resetPassMsg[u.id] && resetPassMsg[u.id] !== 'enviando' && (
+                          <span style={{fontSize:'11px',color:resetPassMsg[u.id].startsWith('OK')?'#2a7a2a':'#b53a2f'}}>
+                            {resetPassMsg[u.id].startsWith('OK') ? resetPassMsg[u.id].slice(3) : resetPassMsg[u.id]}
+                          </span>
+                        )}
                       </div>
                     </div>
                   )}

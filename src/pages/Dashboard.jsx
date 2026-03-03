@@ -21,6 +21,12 @@ export default function Dashboard() {
   const [pdfUrl, setPdfUrl] = useState(null)
   const isAdmin = profile && profile.rol === 'admin'
 
+  // Cambiar contraseña
+  const [showCambiarPass, setShowCambiarPass] = useState(false)
+  const [passForm, setPassForm] = useState({ nueva: '', confirmar: '' })
+  const [passMsg, setPassMsg] = useState('')
+  const [passLoading, setPassLoading] = useState(false)
+
   // Filtros
   const [filtroMes, setFiltroMes] = useState('')
   const [filtroAnio, setFiltroAnio] = useState('')
@@ -48,6 +54,17 @@ export default function Dashboard() {
       URL.revokeObjectURL(url)
     }
     setDownloading(null)
+  }
+
+  async function handleCambiarPass(e) {
+    e.preventDefault()
+    if (passForm.nueva !== passForm.confirmar) { setPassMsg('Las contraseñas no coinciden'); return }
+    if (passForm.nueva.length < 6) { setPassMsg('La contraseña debe tener al menos 6 caracteres'); return }
+    setPassLoading(true); setPassMsg('')
+    const { error } = await supabase.auth.updateUser({ password: passForm.nueva })
+    if (error) setPassMsg('Error: ' + error.message)
+    else { setPassMsg('OK Contraseña actualizada correctamente.'); setPassForm({ nueva: '', confirmar: '' }); setShowCambiarPass(false) }
+    setPassLoading(false)
   }
 
   async function viewRecibo(recibo) {
@@ -240,6 +257,44 @@ export default function Dashboard() {
           )}
         </div>
       </main>
+
+      {/* Cambiar contraseña — footer */}
+      <div style={{borderTop:'1px solid #ede6d8',padding:'20px 0 40px'}}>
+        <div style={{maxWidth:'960px',margin:'0 auto',padding:'0 24px'}}>
+          {!showCambiarPass ? (
+            <button onClick={() => { setShowCambiarPass(true); setPassMsg('') }}
+              style={{background:'none',border:'none',color:'#b0987a',fontSize:'12px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',textDecoration:'underline',padding:0}}>
+              Cambiar contraseña
+            </button>
+          ) : (
+            <div style={{maxWidth:'400px'}}>
+              <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e',marginBottom:'14px'}}>Cambiar contraseña</div>
+              <form onSubmit={handleCambiarPass} style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+                <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Nueva contraseña</label>
+                  <input type="password" value={passForm.nueva} onChange={e => setPassForm({...passForm,nueva:e.target.value})} required placeholder="Mínimo 6 caracteres"
+                    style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',width:'100%',boxSizing:'border-box'}} />
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Confirmar contraseña</label>
+                  <input type="password" value={passForm.confirmar} onChange={e => setPassForm({...passForm,confirmar:e.target.value})} required placeholder="Repetí la contraseña"
+                    style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',width:'100%',boxSizing:'border-box'}} />
+                </div>
+                {passMsg && <p style={{margin:0,padding:'9px 12px',borderRadius:'3px',fontSize:'13px',background:passMsg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:passMsg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(passMsg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{passMsg.startsWith('OK')?passMsg.slice(3):passMsg}</p>}
+                <div style={{display:'flex',gap:'8px'}}>
+                  <button type="submit" disabled={passLoading} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'9px 18px',fontSize:'13px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:passLoading?0.7:1}}>
+                    {passLoading ? 'Guardando...' : 'Guardar'}
+                  </button>
+                  <button type="button" onClick={() => { setShowCambiarPass(false); setPassMsg(''); setPassForm({nueva:'',confirmar:''}) }}
+                    style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'9px 16px',fontSize:'13px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
