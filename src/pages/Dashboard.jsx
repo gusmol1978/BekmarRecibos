@@ -154,13 +154,14 @@ export default function Dashboard() {
     if (!editVacForm.fecha_desde || !editVacForm.fecha_hasta) { setEditVacMsg('Ingresá las fechas'); return }
     if (editVacForm.fecha_hasta < editVacForm.fecha_desde) { setEditVacMsg('La fecha de fin debe ser posterior al inicio'); return }
     setEditVacLoading(true); setEditVacMsg('')
-    const { error } = await supabase.from('solicitudes_vacaciones').update({
+    const { data, error } = await supabase.from('solicitudes_vacaciones').update({
       tipo: editVacForm.tipo,
       fecha_desde: editVacForm.fecha_desde,
       fecha_hasta: editVacForm.fecha_hasta,
       comentario: editVacForm.comentario || null
-    }).eq('id', editandoSol).eq('user_id', user.id).eq('estado', 'pendiente')
+    }).eq('id', editandoSol).eq('user_id', user.id).eq('estado', 'pendiente').select()
     if (error) setEditVacMsg('Error: ' + error.message)
+    else if (!data || data.length === 0) setEditVacMsg('No se pudo guardar. La solicitud ya no está pendiente o no tenés permiso.')
     else { setEditandoSol(null); fetchSolicitudes() }
     setEditVacLoading(false)
   }
