@@ -61,6 +61,8 @@ export default function Admin() {
   const [creatingUser, setCreatingUser] = useState(false)
   const [newUserMsg, setNewUserMsg] = useState('')
   const [listMsg, setListMsg] = useState('')
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [deletingBulk, setDeletingBulk] = useState(false)
   const [resetPassId, setResetPassId] = useState(null)
   const [resetPassMsg, setResetPassMsg] = useState({})
   const [empleadosTab, setEmpleadosTab] = useState('activos')
@@ -527,6 +529,47 @@ export default function Admin() {
 
   const hayFiltrosLista = filtroUsuario || filtroMes || filtroAnio || filtroFirmado
 
+  function fmtCargado(ts) {
+    if (!ts) return '—'
+    const d = new Date(ts)
+    const dia = String(d.getDate()).padStart(2,'0')
+    const mes = String(d.getMonth()+1).padStart(2,'0')
+    const hora = String(d.getHours()).padStart(2,'0')
+    const min = String(d.getMinutes()).padStart(2,'0')
+    return `${dia}/${mes} ${hora}:${min}`
+  }
+
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === recibosFiltrados.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(recibosFiltrados.map(r => r.id)))
+    }
+  }
+
+  async function deleteSelected() {
+    if (selectedIds.size === 0) return
+    if (!window.confirm(`¿Eliminar ${selectedIds.size} recibo${selectedIds.size !== 1 ? 's' : ''}? Esta acción no se puede deshacer.`)) return
+    setDeletingBulk(true)
+    const toDelete = recibos.filter(r => selectedIds.has(r.id))
+    const paths = toDelete.map(r => r.archivo_path).filter(Boolean)
+    if (paths.length > 0) await supabase.storage.from('recibos-pdf').remove(paths)
+    for (const id of selectedIds) {
+      await supabase.from('recibos').delete().eq('id', id)
+    }
+    setSelectedIds(new Set())
+    setDeletingBulk(false)
+    fetchRecibos()
+  }
+
   return (
     <div style={{minHeight:'100vh',background:'#f7f4ef',fontFamily:'"DM Sans",sans-serif'}}>
 
@@ -778,13 +821,30 @@ export default function Admin() {
               </div>
             )}
 
+            {/* Barra bulk estilo Gmail */}
+            {selectedIds.size > 0 && (
+              <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'12px',padding:'10px 16px',background:'#0f1f3d',borderRadius:'4px',color:'#fff'}}>
+                <input type="checkbox" checked={selectedIds.size === recibosFiltrados.length} onChange={toggleSelectAll}
+                  style={{width:'16px',height:'16px',cursor:'pointer',accentColor:'#c8a96e'}} />
+                <span style={{fontSize:'13px',fontWeight:500}}>{selectedIds.size} seleccionado{selectedIds.size !== 1 ? 's' : ''}</span>
+                <button onClick={deleteSelected} disabled={deletingBulk}
+                  style={{background:'#b53a2f',color:'#fff',border:'none',borderRadius:'3px',padding:'6px 16px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:deletingBulk?0.7:1}}>
+                  {deletingBulk ? 'Eliminando...' : `✕ Eliminar ${selectedIds.size}`}
+                </button>
+                <button onClick={() => setSelectedIds(new Set())}
+                  style={{background:'transparent',color:'rgba(255,255,255,0.6)',border:'1.5px solid rgba(255,255,255,0.25)',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                  Cancelar
+                </button>
+              </div>
+            )}
+
             {recibosFiltrados.length === 0 ? (
               <p style={{color:'#a89070'}}>No hay recibos para los filtros seleccionados.</p>
             ) : isMobile ? (
               /* Vista mobile: tarjetas */
               <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
                 {recibosFiltrados.map(r => (
-                  <div key={r.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',overflow:'hidden'}}>
+                  <div key={r.id} style={{background:selectedIds.has(r.id)?'#f0f4ff':'#fff',borderRadius:'4px',border:selectedIds.has(r.id)?'1.5px solid #a5b4fc':'1px solid #ede6d8',overflow:'hidden',transition:'background 0.1s'}}>
                     {editingRecibo === r.id ? (
                       <div style={{padding:'14px 16px',display:'flex',flexDirection:'column',gap:'10px'}}>
                         <div style={{fontSize:'13px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
@@ -816,16 +876,21 @@ export default function Admin() {
                     ) : (
                       <div style={{padding:'14px 16px'}}>
                         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
-                          <div>
-                            <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
-                            <div style={{fontSize:'12px',color:'#a89070'}}>{fmtFechaCorta(r.fecha)} · {r.descripcion || 'Liquidacion'}</div>
+                          <div style={{display:'flex',alignItems:'flex-start',gap:'10px'}}>
+                            <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)}
+                              style={{width:'15px',height:'15px',cursor:'pointer',accentColor:'#0f1f3d',marginTop:'2px',flexShrink:0}} />
+                            <div>
+                              <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
+                              <div style={{fontSize:'12px',color:'#a89070'}}>{fmtFechaCorta(r.fecha)} · {r.descripcion || 'Liquidacion'}</div>
+                              <div style={{fontSize:'11px',color:'#b0a090',marginTop:'2px'}}>Cargado: {fmtCargado(r.created_at)}</div>
+                            </div>
                           </div>
                           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
                             {r.monto && <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600}}>$ {parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>}
                             <FirmaAdminBadge recibo={r} />
                           </div>
                         </div>
-                        <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                        <div style={{display:'flex',gap:'6px',flexWrap:'wrap',paddingLeft:'25px'}}>
                           <button onClick={() => viewRecibo(r)} style={btnSm('outline')}>Ver</button>
                           <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{...btnSm('primary'),opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'Descargar'}</button>
                           <button onClick={() => startEditRecibo(r)} style={btnSm('outline')}>Editar</button>
@@ -840,7 +905,11 @@ export default function Admin() {
             ) : (
               /* Vista desktop: tabla */
               <div style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',overflow:'hidden'}}>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 120px 150px 100px 120px 230px',padding:'10px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',gap:'12px'}}>
+                <div style={{display:'grid',gridTemplateColumns:'36px 1fr 110px 140px 90px 110px 110px 200px',padding:'10px 16px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',gap:'10px',alignItems:'center'}}>
+                  <input type="checkbox"
+                    checked={recibosFiltrados.length > 0 && selectedIds.size === recibosFiltrados.length}
+                    onChange={toggleSelectAll}
+                    style={{width:'15px',height:'15px',cursor:'pointer',accentColor:'#0f1f3d'}} />
                   <button onClick={() => toggleSort('nombre')} style={{background:'none',border:'none',cursor:'pointer',textAlign:'left',fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'"DM Sans",sans-serif',padding:0}}>
                     Empleado <SortIcon col="nombre" />
                   </button>
@@ -849,6 +918,7 @@ export default function Admin() {
                   </button>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Descripcion</div>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Monto</div>
+                  <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Cargado</div>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Firma</div>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Acciones</div>
                 </div>
@@ -882,7 +952,9 @@ export default function Admin() {
                       </div>
                     </div>
                   ) : (
-                    <div key={r.id} style={{display:'grid',gridTemplateColumns:'1fr 120px 150px 100px 120px 230px',padding:'13px 20px',gap:'12px',alignItems:'center',borderBottom:i < recibosFiltrados.length-1 ? '1px solid #f3ede3' : 'none',background:i%2===0?'#fff':'#fdfbf8'}}>
+                    <div key={r.id} style={{display:'grid',gridTemplateColumns:'36px 1fr 110px 140px 90px 110px 110px 200px',padding:'11px 16px',gap:'10px',alignItems:'center',borderBottom:i < recibosFiltrados.length-1 ? '1px solid #f3ede3' : 'none',background:selectedIds.has(r.id)?'#f0f4ff':i%2===0?'#fff':'#fdfbf8',transition:'background 0.1s'}}>
+                      <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)}
+                        style={{width:'15px',height:'15px',cursor:'pointer',accentColor:'#0f1f3d'}} />
                       <div>
                         <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
                         {r.profiles && r.profiles.nombre_completo && <div style={{fontSize:'11px',color:'#a89070'}}>{r.profiles.email}</div>}
@@ -890,6 +962,7 @@ export default function Admin() {
                       <div style={{fontSize:'13px',color:'#5c4a32'}}>{fmtFecha(r.fecha)}</div>
                       <div style={{fontSize:'13px',color:'#8a7560'}}>{r.descripcion || 'Liquidacion'}</div>
                       <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600}}>{r.monto ? '$ '+parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2}) : '—'}</div>
+                      <div style={{fontSize:'12px',color:'#8a7560'}}>{fmtCargado(r.created_at)}</div>
                       <div><FirmaAdminBadge recibo={r} /></div>
                       <div style={{display:'flex',gap:'4px',flexWrap:'wrap'}}>
                         <button onClick={() => viewRecibo(r)} style={btnSm('outline')}>Ver</button>
