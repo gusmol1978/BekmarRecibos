@@ -63,7 +63,59 @@ export default function Dashboard() {
   const [sortField, setSortField] = useState('fecha')
   const [sortDir, setSortDir] = useState('desc')
 
-  useEffect(() => { fetchRecibos() }, [user])
+  // Tabs
+  const [activeTab, setActiveTab] = useState('recibos')
+
+  // Vacaciones
+  const [solicitudes, setSolicitudes] = useState([])
+  const [vacForm, setVacForm] = useState({ tipo: 'vacaciones', fecha_desde: '', fecha_hasta: '', comentario: '' })
+  const [vacMsg, setVacMsg] = useState('')
+  const [vacLoading, setVacLoading] = useState(false)
+  const [showVacForm, setShowVacForm] = useState(false)
+  const [vacFeatureOn, setVacFeatureOn] = useState(false)
+
+  const tiposLabel = { vacaciones: 'Vacaciones', licencia_medica: 'Licencia médica', licencia_personal: 'Licencia personal', otro: 'Otro' }
+
+  function diasEntreFechas(desde, hasta) {
+    if (!desde || !hasta) return 0
+    const d1 = new Date(desde + 'T00:00:00'), d2 = new Date(hasta + 'T00:00:00')
+    return Math.max(0, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1)
+  }
+
+  useEffect(() => { fetchRecibos(); fetchSolicitudes(); fetchVacFeature() }, [user])
+
+  async function fetchVacFeature() {
+    const { data } = await supabase.from('feature_flags').select('enabled').eq('nombre', 'vacaciones').single()
+    if (data) setVacFeatureOn(data.enabled)
+  }
+
+  async function fetchSolicitudes() {
+    const { data } = await supabase.from('solicitudes_vacaciones').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
+    setSolicitudes(data || [])
+  }
+
+  async function handleSolicitarVacaciones(e) {
+    e.preventDefault()
+    if (!vacForm.fecha_desde || !vacForm.fecha_hasta) { setVacMsg('Ingresá las fechas'); return }
+    if (vacForm.fecha_hasta < vacForm.fecha_desde) { setVacMsg('La fecha de fin debe ser posterior al inicio'); return }
+    setVacLoading(true); setVacMsg('')
+    const { error } = await supabase.from('solicitudes_vacaciones').insert({
+      user_id: user.id,
+      tipo: vacForm.tipo,
+      fecha_desde: vacForm.fecha_desde,
+      fecha_hasta: vacForm.fecha_hasta,
+      comentario: vacForm.comentario || null,
+      estado: 'pendiente'
+    })
+    if (error) setVacMsg('Error: ' + error.message)
+    else {
+      setVacMsg('OK Solicitud enviada correctamente')
+      setVacForm({ tipo: 'vacaciones', fecha_desde: '', fecha_hasta: '', comentario: '' })
+      setShowVacForm(false)
+      fetchSolicitudes()
+    }
+    setVacLoading(false)
+  }
 
   async function fetchRecibos() {
     setLoading(true)
@@ -103,16 +155,12 @@ export default function Dashboard() {
   async function handleFirmar(recibo) {
     if (!firmaPass) { setFirmaMsg('Ingresá tu contraseña para firmar'); return }
     setFirmaLoading(true); setFirmaMsg('')
-    // Verificar identidad con signInWithPassword y luego restaurar la sesion
-    const { data: signInData, error: authError } = await supabase.auth.signInWithPassword({ email: user.email, password: firmaPass })
+    // Verificar identidad re-autenticando con la contraseña
+    const { error: authError } = await supabase.auth.signInWithPassword({ email: user.email, password: firmaPass })
     if (authError) {
       setFirmaMsg('Contraseña incorrecta. Intentá nuevamente.')
       setFirmaLoading(false)
       return
-    }
-    // Restaurar el token de sesion original para no romper el estado del usuario
-    if (signInData?.session) {
-      await supabase.auth.setSession({ access_token: signInData.session.access_token, refresh_token: signInData.session.refresh_token })
     }
     // Registrar la firma digital
     const { error } = await supabase.from('recibos').update({
@@ -219,6 +267,126 @@ export default function Dashboard() {
       </header>
       <main style={{padding:'40px 0 80px'}}>
         <div style={{maxWidth:'960px',margin:'0 auto',padding:'0 24px'}}>
+
+          {/* Tabs principales */}
+          <div style={{borderBottom:'1px solid #e2d9cc',display:'flex',gap:'0',marginBottom:'28px'}}>
+            <button onClick={() => setActiveTab('recibos')} style={{padding:'10px 24px',fontSize:'14px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',color:activeTab==='recibos'?'#2c1f0e':'#a89070',borderBottom:activeTab==='recibos'?'2px solid #c8a96e':'2px solid transparent'}}>
+              Mis Recibos
+            </button>
+            {vacFeatureOn && (
+              <button onClick={() => setActiveTab('vacaciones')} style={{padding:'10px 24px',fontSize:'14px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',color:activeTab==='vacaciones'?'#2c1f0e':'#a89070',borderBottom:activeTab==='vacaciones'?'2px solid #c8a96e':'2px solid transparent'}}>
+                Vacaciones {solicitudes.filter(s=>s.estado==='pendiente').length > 0 && <span style={{background:'#d97706',color:'#fff',borderRadius:'10px',padding:'1px 6px',fontSize:'10px',marginLeft:'4px'}}>{solicitudes.filter(s=>s.estado==='pendiente').length}</span>}
+              </button>
+            )}
+          </div>
+
+          {/* TAB VACACIONES */}
+          {activeTab === 'vacaciones' && (
+            <div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px',flexWrap:'wrap',gap:'12px'}}>
+                <div>
+                  <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'26px',fontWeight:400,color:'#2c1f0e',margin:'0 0 4px'}}>Vacaciones y Licencias</h2>
+                  <p style={{color:'#8a7560',fontSize:'13px',margin:0}}>Solicitá días y seguí el estado de tus pedidos</p>
+                </div>
+                <button onClick={() => { setShowVacForm(v => !v); setVacMsg('') }}
+                  style={{background:showVacForm?'transparent':'#0f1f3d',color:showVacForm?'#5c4a32':'#fff',border:showVacForm?'1.5px solid #e2d9cc':'none',borderRadius:'3px',padding:'9px 18px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                  {showVacForm ? 'Cancelar' : '+ Nueva solicitud'}
+                </button>
+              </div>
+
+              {/* Formulario nueva solicitud */}
+              {showVacForm && (
+                <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
+                  <form onSubmit={handleSolicitarVacaciones} style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+                    <div style={{display:'flex',gap:'12px',flexWrap:'wrap'}}>
+                      <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'180px'}}>
+                        <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Tipo</label>
+                        <select value={vacForm.tipo} onChange={e => setVacForm({...vacForm,tipo:e.target.value})} style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}}>
+                          <option value="vacaciones">Vacaciones</option>
+                          <option value="licencia_medica">Licencia médica</option>
+                          <option value="licencia_personal">Licencia personal</option>
+                          <option value="otro">Otro</option>
+                        </select>
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'150px'}}>
+                        <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Desde</label>
+                        <input type="date" value={vacForm.fecha_desde} onChange={e => setVacForm({...vacForm,fecha_desde:e.target.value})} required style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}} />
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'150px'}}>
+                        <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Hasta</label>
+                        <input type="date" value={vacForm.fecha_hasta} onChange={e => setVacForm({...vacForm,fecha_hasta:e.target.value})} required style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}} />
+                      </div>
+                    </div>
+                    {vacForm.fecha_desde && vacForm.fecha_hasta && vacForm.fecha_hasta >= vacForm.fecha_desde && (
+                      <div style={{fontSize:'13px',color:'#5c4a32',background:'#f7f4ef',padding:'8px 12px',borderRadius:'3px'}}>
+                        📅 {diasEntreFechas(vacForm.fecha_desde, vacForm.fecha_hasta)} días solicitados
+                      </div>
+                    )}
+                    <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                      <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Comentario (opcional)</label>
+                      <textarea value={vacForm.comentario} onChange={e => setVacForm({...vacForm,comentario:e.target.value})} placeholder="Agregá un comentario o aclaración..." rows={3}
+                        style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'10px 13px',fontSize:'14px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',resize:'vertical'}} />
+                    </div>
+                    {vacMsg && <p style={{margin:0,padding:'9px 12px',borderRadius:'3px',fontSize:'13px',background:vacMsg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:vacMsg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(vacMsg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{vacMsg.startsWith('OK')?vacMsg.slice(3):vacMsg}</p>}
+                    <div>
+                      <button type="submit" disabled={vacLoading} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'10px 22px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:vacLoading?0.7:1}}>
+                        {vacLoading ? 'Enviando...' : 'Enviar solicitud'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Lista de solicitudes */}
+              {solicitudes.length === 0 ? (
+                <div style={{textAlign:'center',padding:'60px 0',color:'#a89070'}}>
+                  <div style={{fontSize:'32px',marginBottom:'12px'}}>🏖️</div>
+                  <p style={{fontSize:'15px',fontWeight:500,color:'#5c4a32',margin:'0 0 6px'}}>No tenés solicitudes aún</p>
+                  <p style={{fontSize:'13px',margin:0}}>Usá el botón "Nueva solicitud" para pedir días</p>
+                </div>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                  {solicitudes.map(s => {
+                    const estadoColor = s.estado === 'aprobada' ? { bg:'#f0fdf4',border:'#86efac',text:'#16a34a',label:'✓ Aprobada' }
+                      : s.estado === 'rechazada' ? { bg:'#fdf2f2',border:'#fca5a5',text:'#b53a2f',label:'✗ Rechazada' }
+                      : { bg:'#fffbeb',border:'#fcd34d',text:'#d97706',label:'⏳ Pendiente' }
+                    const dias = diasEntreFechas(s.fecha_desde, s.fecha_hasta)
+                    return (
+                      <div key={s.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',padding:'16px 20px'}}>
+                        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap'}}>
+                          <div style={{flex:1}}>
+                            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',flexWrap:'wrap'}}>
+                              <span style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{tiposLabel[s.tipo] || s.tipo}</span>
+                              <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
+                              <span style={{fontSize:'13px',color:'#5c4a32'}}>
+                                {new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                                {' → '}
+                                {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                              </span>
+                              <span style={{fontSize:'12px',color:'#8a7560'}}>{dias} {dias===1?'día':'días'}</span>
+                            </div>
+                            {s.comentario && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'4px'}}>"{s.comentario}"</div>}
+                            {s.comentario_admin && (
+                              <div style={{fontSize:'12px',color: s.estado==='aprobada'?'#15803d':'#b53a2f',marginTop:'6px',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border}}>
+                                <strong>Admin:</strong> {s.comentario_admin}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{display:'inline-flex',alignItems:'center',gap:'5px',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'4px 12px',flexShrink:0}}>
+                            <span style={{fontSize:'12px',fontWeight:600,color:estadoColor.text}}>{estadoColor.label}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB RECIBOS */}
+          {activeTab === 'recibos' && (
+          <div>
           <div style={{marginBottom:'24px'}}>
             <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'28px',fontWeight:400,color:'#2c1f0e',margin:'0 0 6px'}}>Mis Recibos de Sueldo</h2>
             <p style={{color:'#8a7560',fontSize:'14px',margin:0}}>Accedé, descargá y firmá tus liquidaciones de haberes</p>
@@ -360,6 +528,8 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
           )}
         </div>
       </main>

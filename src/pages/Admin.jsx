@@ -76,15 +76,28 @@ export default function Admin() {
   const [bulkResults, setBulkResults] = useState([])
   const [bulkMsg, setBulkMsg] = useState('')
 
+  const [solicitudesVac, setSolicitudesVac] = useState([])
+  const [vacAccionMsg, setVacAccionMsg] = useState({})
+  const [vacFiltro, setVacFiltro] = useState('todas')
+  const [vacFeatureOn, setVacFeatureOn] = useState(false)
+
+  const tiposLabel = { vacaciones: 'Vacaciones', licencia_medica: 'Licencia médica', licencia_personal: 'Licencia personal', otro: 'Otro' }
+
+  function diasEntreFechas(desde, hasta) {
+    if (!desde || !hasta) return 0
+    const d1 = new Date(desde + 'T00:00:00'), d2 = new Date(hasta + 'T00:00:00')
+    return Math.max(0, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1)
+  }
+
   useEffect(() => {
-    fetchUsuarios(); fetchRecibos()
+    fetchUsuarios(); fetchRecibos(); fetchSolicitudesVac(); fetchVacFeature()
     const handler = () => setIsMobile(window.innerWidth < 700)
     window.addEventListener('resize', handler)
     return () => window.removeEventListener('resize', handler)
   }, [])
 
   async function fetchUsuarios() {
-    const { data } = await supabase.from('profiles_with_last_signin').select('id, nombre_completo, email, telefono, activo, last_sign_in_at').order('nombre_completo')
+    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo').order('nombre_completo')
     setUsuarios(data || [])
   }
 
@@ -95,6 +108,36 @@ export default function Admin() {
       .order('fecha', { ascending: false })
       .limit(1000)
     setRecibos(data || [])
+  }
+
+  async function fetchVacFeature() {
+    const { data } = await supabase.from('feature_flags').select('enabled').eq('nombre', 'vacaciones').single()
+    if (data) setVacFeatureOn(data.enabled)
+  }
+
+  async function toggleVacFeature() {
+    const nuevoEstado = !vacFeatureOn
+    setVacFeatureOn(nuevoEstado)
+    await supabase.from('feature_flags').upsert({ nombre: 'vacaciones', enabled: nuevoEstado }, { onConflict: 'nombre' })
+  }
+
+  async function fetchSolicitudesVac() {
+    const { data } = await supabase
+      .from('solicitudes_vacaciones')
+      .select('*, profiles!solicitudes_vacaciones_user_id_fkey(nombre_completo, email)')
+      .order('created_at', { ascending: false })
+    setSolicitudesVac(data || [])
+  }
+
+  async function accionVacacion(sol, estado, comentario) {
+    const { error } = await supabase.from('solicitudes_vacaciones').update({
+      estado,
+      comentario_admin: comentario || null,
+      revisado_por: user.id,
+      revisado_at: new Date().toISOString()
+    }).eq('id', sol.id)
+    if (error) setVacAccionMsg(p => ({ ...p, [sol.id]: 'Error: ' + error.message }))
+    else { setVacAccionMsg(p => ({ ...p, [sol.id]: '' })); fetchSolicitudesVac() }
   }
 
   async function handleUpload(e) {
@@ -378,14 +421,6 @@ export default function Admin() {
 
   // ───────────────────────────────────────────────────────────────
 
-  function lastSignInInfo(last_sign_in_at) {
-    if (!last_sign_in_at) return { label: 'Nunca ingresó', alerta: true }
-    const diff = (Date.now() - new Date(last_sign_in_at).getTime()) / (1000 * 60 * 60 * 24)
-    const fecha = new Date(last_sign_in_at).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-    if (diff > 45) return { label: `Último ingreso: ${fecha}`, alerta: true }
-    return { label: `Último ingreso: ${fecha}`, alerta: false }
-  }
-
   function toggleSort(col) {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortBy(col); setSortDir('asc') }
@@ -485,6 +520,9 @@ export default function Admin() {
           <button onClick={() => setActiveTab('subir')} style={tabStyle('subir')}>Subir</button>
           <button onClick={() => setActiveTab('lista')} style={tabStyle('lista')}>Recibos ({recibosFiltrados.length})</button>
           <button onClick={() => setActiveTab('empleados')} style={tabStyle('empleados')}>Empleados ({usuariosActivos.length})</button>
+          <button onClick={() => setActiveTab('vacaciones')} style={tabStyle('vacaciones')}>
+            Vacaciones {solicitudesVac.filter(s=>s.estado==='pendiente').length > 0 && <span style={{background:'#d97706',color:'#fff',borderRadius:'10px',padding:'1px 6px',fontSize:'10px',marginLeft:'4px'}}>{solicitudesVac.filter(s=>s.estado==='pendiente').length}</span>}
+          </button>
         </div>
 
         {/* TAB: SUBIR */}
@@ -834,6 +872,21 @@ export default function Admin() {
               >{showNewUser ? 'Cancelar' : '+ Nuevo Empleado'}</button>
             </div>
 
+            {/* Feature flag: Vacaciones */}
+            <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'14px 18px',marginBottom:'16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600,color:'#2c1f0e'}}>Módulo de Vacaciones</div>
+                <div style={{fontSize:'11px',color:'#a89070',marginTop:'2px'}}>{vacFeatureOn ? 'Visible para todos los empleados' : 'Oculto para los empleados — solo vos lo podés ver'}</div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                <span style={{fontSize:'12px',color: vacFeatureOn ? '#16a34a' : '#a89070', fontWeight:500}}>{vacFeatureOn ? 'Activo' : 'Inactivo'}</span>
+                <div onClick={toggleVacFeature} title={vacFeatureOn ? 'Desactivar para empleados' : 'Activar para empleados'}
+                  style={{width:'44px',height:'24px',borderRadius:'12px',background:vacFeatureOn?'#16a34a':'#d1c9bc',cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}>
+                  <div style={{position:'absolute',top:'3px',left:vacFeatureOn?'23px':'3px',width:'18px',height:'18px',borderRadius:'50%',background:'white',transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.25)'}} />
+                </div>
+              </div>
+            </div>
+
             {/* Sub-tabs Activos / Sin acceso */}
             <div style={{display:'flex',gap:'0',marginBottom:'16px',borderBottom:'1px solid #e2d9cc'}}>
               <button onClick={() => setEmpleadosTab('activos')}
@@ -929,21 +982,6 @@ export default function Admin() {
                           </div>
                           <div style={{fontSize:'12px',color:'#a89070',marginTop:'2px'}}>{u.email}</div>
                           {u.telefono && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'2px'}}>Tel: {u.telefono}</div>}
-                          {(() => {
-                            const info = lastSignInInfo(u.last_sign_in_at)
-                            return (
-                              <div style={{
-                                display:'inline-flex',alignItems:'center',gap:'4px',marginTop:'4px',
-                                fontSize:'11px',fontWeight:600,
-                                color: info.alerta ? '#b53a2f' : '#2a6a2a',
-                                background: info.alerta ? '#fdf2f2' : '#f0fdf0',
-                                border: `1px solid ${info.alerta ? '#fca5a5' : '#86efac'}`,
-                                borderRadius:'10px',padding:'2px 8px',
-                              }}>
-                                {info.alerta ? '⚠ ' : '✓ '}{info.label}
-                              </div>
-                            )
-                          })()}
                         </div>
                         <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}}>
                           <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
@@ -990,7 +1028,122 @@ export default function Admin() {
             </div>
           </div>
         )}
+
+        {/* TAB: VACACIONES */}
+        {activeTab === 'vacaciones' && (
+          <div style={{marginTop:'28px'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px',flexWrap:'wrap',gap:'12px'}}>
+              <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'22px',fontWeight:400,color:'#2c1f0e',margin:0}}>Solicitudes de Vacaciones y Licencias</h2>
+              <div style={{display:'flex',gap:'8px'}}>
+                {['todas','pendiente','aprobada','rechazada'].map(f => (
+                  <button key={f} onClick={() => setVacFiltro(f)}
+                    style={{padding:'6px 14px',fontSize:'12px',fontWeight:500,cursor:'pointer',border:'1.5px solid',borderRadius:'3px',fontFamily:'"DM Sans",sans-serif',
+                      background: vacFiltro===f ? '#0f1f3d' : 'transparent',
+                      color: vacFiltro===f ? '#fff' : '#5c4a32',
+                      borderColor: vacFiltro===f ? '#0f1f3d' : '#e2d9cc'}}>
+                    {f==='todas'?'Todas':f.charAt(0).toUpperCase()+f.slice(1)}
+                    {f==='pendiente' && solicitudesVac.filter(s=>s.estado==='pendiente').length > 0 && ` (${solicitudesVac.filter(s=>s.estado==='pendiente').length})`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {solicitudesVac.filter(s => vacFiltro==='todas' || s.estado===vacFiltro).length === 0 ? (
+              <p style={{color:'#a89070',textAlign:'center',padding:'40px 0'}}>No hay solicitudes {vacFiltro !== 'todas' ? vacFiltro+'s' : ''}.</p>
+            ) : (
+              <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+                {solicitudesVac.filter(s => vacFiltro==='todas' || s.estado===vacFiltro).map(s => {
+                  const estadoColor = s.estado==='aprobada' ? {bg:'#f0fdf4',border:'#86efac',text:'#16a34a',label:'✓ Aprobada'}
+                    : s.estado==='rechazada' ? {bg:'#fdf2f2',border:'#fca5a5',text:'#b53a2f',label:'✗ Rechazada'}
+                    : {bg:'#fffbeb',border:'#fcd34d',text:'#d97706',label:'⏳ Pendiente'}
+                  const dias = diasEntreFechas(s.fecha_desde, s.fecha_hasta)
+                  const nombre = s.profiles?.nombre_completo || s.profiles?.email || 'Empleado'
+                  return (
+                    <div key={s.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',padding:'16px 20px'}}>
+                      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap',marginBottom: s.estado==='pendiente' ? '14px' : '0'}}>
+                        <div style={{flex:1}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',flexWrap:'wrap'}}>
+                            <span style={{fontSize:'14px',fontWeight:700,color:'#2c1f0e'}}>{nombre}</span>
+                            <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
+                            <span style={{fontSize:'13px',fontWeight:600,color:'#5c4a32'}}>{tiposLabel[s.tipo] || s.tipo}</span>
+                            <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
+                            <span style={{fontSize:'13px',color:'#5c4a32'}}>
+                              {new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                              {' → '}
+                              {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                            </span>
+                            <span style={{fontSize:'12px',color:'#8a7560',fontWeight:500}}>{dias} {dias===1?'día':'días'}</span>
+                          </div>
+                          <div style={{fontSize:'11px',color:'#a89070'}}>{s.profiles?.email}</div>
+                          {s.comentario && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'5px',fontStyle:'italic'}}>"{s.comentario}"</div>}
+                          {s.comentario_admin && (
+                            <div style={{fontSize:'12px',marginTop:'6px',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border,color:estadoColor.text}}>
+                              <strong>Tu respuesta:</strong> {s.comentario_admin}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{display:'inline-flex',alignItems:'center',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'4px 12px',flexShrink:0}}>
+                          <span style={{fontSize:'12px',fontWeight:600,color:estadoColor.text}}>{estadoColor.label}</span>
+                        </div>
+                      </div>
+
+                      {/* Acciones para pendientes */}
+                      {s.estado === 'pendiente' && (
+                        <VacacionAcciones sol={s} accionVacacion={accionVacacion} vacAccionMsg={vacAccionMsg} />
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function VacacionAcciones({ sol, accionVacacion, vacAccionMsg }) {
+  const [comentario, setComentario] = useState('')
+  const [accionPendiente, setAccionPendiente] = useState(null)
+  return (
+    <div style={{borderTop:'1px solid #f3ede3',paddingTop:'12px'}}>
+      {accionPendiente ? (
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{fontSize:'12px',fontWeight:600,color:'#2c1f0e'}}>
+            {accionPendiente==='aprobada' ? '✓ Aprobar solicitud' : '✗ Rechazar solicitud'}
+          </div>
+          <input
+            type="text"
+            value={comentario}
+            onChange={e => setComentario(e.target.value)}
+            placeholder="Comentario para el empleado (opcional)"
+            style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 12px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',width:'100%',boxSizing:'border-box'}}
+          />
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={() => { accionVacacion(sol, accionPendiente, comentario); setAccionPendiente(null) }}
+              style={{background:accionPendiente==='aprobada'?'#16a34a':'#b53a2f',color:'#fff',border:'none',borderRadius:'3px',padding:'7px 16px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+              Confirmar {accionPendiente==='aprobada'?'aprobación':'rechazo'}
+            </button>
+            <button onClick={() => setAccionPendiente(null)}
+              style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'7px 14px',fontSize:'12px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          <button onClick={() => setAccionPendiente('aprobada')}
+            style={{background:'#16a34a',color:'#fff',border:'none',borderRadius:'3px',padding:'7px 16px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+            ✓ Aprobar
+          </button>
+          <button onClick={() => setAccionPendiente('rechazada')}
+            style={{background:'transparent',border:'1.5px solid #fca5a5',borderRadius:'3px',padding:'7px 16px',fontSize:'12px',fontWeight:600,color:'#b53a2f',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+            ✗ Rechazar
+          </button>
+          {vacAccionMsg[sol.id] && <span style={{fontSize:'12px',color:'#b53a2f'}}>{vacAccionMsg[sol.id]}</span>}
+        </div>
+      )}
     </div>
   )
 }
