@@ -79,9 +79,33 @@ export default function Admin() {
   const [solicitudesVac, setSolicitudesVac] = useState([])
   const [vacAccionMsg, setVacAccionMsg] = useState({})
   const [vacFiltro, setVacFiltro] = useState('todas')
+  const [vacFiltroEmpleado, setVacFiltroEmpleado] = useState('')
+  const [vacFiltroAnio, setVacFiltroAnio] = useState('')
+  const [vacSortBy, setVacSortBy] = useState('created_at')
+  const [vacSortDir, setVacSortDir] = useState('desc')
   const [vacFeatureOn, setVacFeatureOn] = useState(false)
 
   const tiposLabel = { vacaciones: 'Vacaciones', licencia_medica: 'Licencia médica', licencia_personal: 'Licencia personal', otro: 'Otro' }
+
+  const FERIADOS_UY = ['01-01', '05-01', '07-18', '08-25', '12-25']
+  function esFeriadoODomingo(date) {
+    if (date.getDay() === 0) return true
+    const mmdd = String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0')
+    return FERIADOS_UY.includes(mmdd)
+  }
+  function diasHabiles(desde, hasta) {
+    if (!desde || !hasta || hasta < desde) return 0
+    let count = 0
+    const cur = new Date(desde + 'T00:00:00')
+    const end = new Date(hasta + 'T00:00:00')
+    while (cur <= end) { if (!esFeriadoODomingo(cur)) count++; cur.setDate(cur.getDate()+1) }
+    return count
+  }
+
+  function toggleVacSort(col) {
+    if (vacSortBy === col) setVacSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setVacSortBy(col); setVacSortDir('asc') }
+  }
 
   function diasEntreFechas(desde, hasta) {
     if (!desde || !hasta) return 0
@@ -1042,11 +1066,49 @@ export default function Admin() {
         )}
 
         {/* TAB: VACACIONES */}
-        {activeTab === 'vacaciones' && (
+        {activeTab === 'vacaciones' && (() => {
+          // Años disponibles en solicitudes
+          const aniosVac = [...new Set(solicitudesVac.map(s => new Date(s.fecha_desde+'T00:00:00').getFullYear()))].sort((a,b) => b-a)
+
+          // Filtrado
+          const vacFiltradas = solicitudesVac
+            .filter(s => vacFiltro === 'todas' || s.estado === vacFiltro)
+            .filter(s => !vacFiltroEmpleado || s.user_id === vacFiltroEmpleado)
+            .filter(s => !vacFiltroAnio || new Date(s.fecha_desde+'T00:00:00').getFullYear() === parseInt(vacFiltroAnio))
+            .sort((a, b) => {
+              let va, vb
+              if (vacSortBy === 'nombre') {
+                va = (a.profiles?.nombre_completo || a.profiles?.email || '').toLowerCase()
+                vb = (b.profiles?.nombre_completo || b.profiles?.email || '').toLowerCase()
+              } else if (vacSortBy === 'fecha_desde') {
+                va = a.fecha_desde; vb = b.fecha_desde
+              } else if (vacSortBy === 'dias') {
+                va = diasHabiles(a.fecha_desde, a.fecha_hasta)
+                vb = diasHabiles(b.fecha_desde, b.fecha_hasta)
+              } else {
+                va = a.created_at; vb = b.created_at
+              }
+              if (va < vb) return vacSortDir === 'asc' ? -1 : 1
+              if (va > vb) return vacSortDir === 'asc' ? 1 : -1
+              return 0
+            })
+
+          const hayFiltros = vacFiltroEmpleado || vacFiltroAnio
+
+          const VacSortBtn = ({ col, label }) => (
+            <button onClick={() => toggleVacSort(col)}
+              style={{background:'none',border:'none',cursor:'pointer',fontSize:'11px',fontWeight:600,color: vacSortBy===col ? '#2c1f0e' : '#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'"DM Sans",sans-serif',padding:'0',display:'flex',alignItems:'center',gap:'3px',whiteSpace:'nowrap'}}>
+              {label}
+              <span style={{color: vacSortBy===col ? '#c8a96e' : '#c8b89a'}}>{vacSortBy===col ? (vacSortDir==='asc' ? '↑' : '↓') : '↕'}</span>
+            </button>
+          )
+
+          return (
           <div style={{marginTop:'28px'}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px',flexWrap:'wrap',gap:'12px'}}>
+            {/* Header + filtros estado */}
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'16px',flexWrap:'wrap',gap:'12px'}}>
               <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'22px',fontWeight:400,color:'#2c1f0e',margin:0}}>Solicitudes de Vacaciones y Licencias</h2>
-              <div style={{display:'flex',gap:'8px'}}>
+              <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
                 {['todas','pendiente','aprobada','rechazada'].map(f => (
                   <button key={f} onClick={() => setVacFiltro(f)}
                     style={{padding:'6px 14px',fontSize:'12px',fontWeight:500,cursor:'pointer',border:'1.5px solid',borderRadius:'3px',fontFamily:'"DM Sans",sans-serif',
@@ -1060,46 +1122,74 @@ export default function Admin() {
               </div>
             </div>
 
-            {solicitudesVac.filter(s => vacFiltro==='todas' || s.estado===vacFiltro).length === 0 ? (
-              <p style={{color:'#a89070',textAlign:'center',padding:'40px 0'}}>No hay solicitudes {vacFiltro !== 'todas' ? vacFiltro+'s' : ''}.</p>
+            {/* Filtros empleado + año + ordenamiento */}
+            <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'14px 18px',marginBottom:'16px',display:'flex',alignItems:'center',gap:'12px',flexWrap:'wrap'}}>
+              <select value={vacFiltroEmpleado} onChange={e => setVacFiltroEmpleado(e.target.value)}
+                style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 10px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',minWidth:'180px'}}>
+                <option value="">Todos los empleados</option>
+                {usuarios.map(u => <option key={u.id} value={u.id}>{u.nombre_completo || u.email}</option>)}
+              </select>
+              <select value={vacFiltroAnio} onChange={e => setVacFiltroAnio(e.target.value)}
+                style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 10px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}}>
+                <option value="">Todos los años</option>
+                {aniosVac.map(a => <option key={a} value={a}>{a}</option>)}
+              </select>
+              {hayFiltros && (
+                <button onClick={() => { setVacFiltroEmpleado(''); setVacFiltroAnio('') }}
+                  style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'7px 12px',fontSize:'12px',color:'#8a7560',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                  Limpiar
+                </button>
+              )}
+              <span style={{marginLeft:'auto',fontSize:'12px',color:'#a89070'}}>{vacFiltradas.length} solicitud{vacFiltradas.length!==1?'es':''}</span>
+            </div>
+
+            {/* Cabecera ordenable */}
+            {vacFiltradas.length > 0 && (
+              <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 1fr 80px 100px',gap:'12px',padding:'8px 20px',background:'#f7f4ef',borderRadius:'4px 4px 0 0',border:'1px solid #ede6d8',borderBottom:'none'}}>
+                <VacSortBtn col="nombre" label="Empleado" />
+                <VacSortBtn col="fecha_desde" label="Fechas" />
+                <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Tipo</div>
+                <VacSortBtn col="dias" label="Días" />
+                <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Estado</div>
+              </div>
+            )}
+
+            {vacFiltradas.length === 0 ? (
+              <p style={{color:'#a89070',textAlign:'center',padding:'40px 0'}}>No hay solicitudes para los filtros seleccionados.</p>
             ) : (
-              <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-                {solicitudesVac.filter(s => vacFiltro==='todas' || s.estado===vacFiltro).map(s => {
+              <div style={{display:'flex',flexDirection:'column',gap:'0'}}>
+                {vacFiltradas.map((s, i) => {
                   const estadoColor = s.estado==='aprobada' ? {bg:'#f0fdf4',border:'#86efac',text:'#16a34a',label:'✓ Aprobada'}
                     : s.estado==='rechazada' ? {bg:'#fdf2f2',border:'#fca5a5',text:'#b53a2f',label:'✗ Rechazada'}
                     : {bg:'#fffbeb',border:'#fcd34d',text:'#d97706',label:'⏳ Pendiente'}
-                  const dias = diasEntreFechas(s.fecha_desde, s.fecha_hasta)
+                  const dias = diasHabiles(s.fecha_desde, s.fecha_hasta)
                   const nombre = s.profiles?.nombre_completo || s.profiles?.email || 'Empleado'
                   return (
-                    <div key={s.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',padding:'16px 20px'}}>
-                      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap',marginBottom: s.estado==='pendiente' ? '14px' : '0'}}>
-                        <div style={{flex:1}}>
-                          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',flexWrap:'wrap'}}>
-                            <span style={{fontSize:'14px',fontWeight:700,color:'#2c1f0e'}}>{nombre}</span>
-                            <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
-                            <span style={{fontSize:'13px',fontWeight:600,color:'#5c4a32'}}>{tiposLabel[s.tipo] || s.tipo}</span>
-                            <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
-                            <span style={{fontSize:'13px',color:'#5c4a32'}}>
-                              {new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
-                              {' → '}
-                              {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
-                            </span>
-                            <span style={{fontSize:'12px',color:'#8a7560',fontWeight:500}}>{dias} {dias===1?'día':'días'}</span>
-                          </div>
+                    <div key={s.id} style={{background: i%2===0 ? '#fff' : '#fdfbf8',border:'1px solid #ede6d8',borderTop: i===0 ? '1px solid #ede6d8' : 'none',padding:'14px 20px',borderRadius: i===vacFiltradas.length-1 ? '0 0 4px 4px' : '0'}}>
+                      {/* Fila principal */}
+                      <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 1fr 80px 100px',gap:'12px',alignItems:'center',marginBottom: s.estado==='pendiente' ? '12px' : '0'}}>
+                        <div>
+                          <div style={{fontSize:'13px',fontWeight:700,color:'#2c1f0e'}}>{nombre}</div>
                           <div style={{fontSize:'11px',color:'#a89070'}}>{s.profiles?.email}</div>
-                          {s.comentario && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'5px',fontStyle:'italic'}}>"{s.comentario}"</div>}
-                          {s.comentario_admin && (
-                            <div style={{fontSize:'12px',marginTop:'6px',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border,color:estadoColor.text}}>
-                              <strong>Tu respuesta:</strong> {s.comentario_admin}
-                            </div>
-                          )}
                         </div>
-                        <div style={{display:'inline-flex',alignItems:'center',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'4px 12px',flexShrink:0}}>
-                          <span style={{fontSize:'12px',fontWeight:600,color:estadoColor.text}}>{estadoColor.label}</span>
+                        <div style={{fontSize:'12px',color:'#5c4a32'}}>
+                          <div>{new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}</div>
+                          <div style={{color:'#a89070'}}>→ {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}</div>
+                        </div>
+                        <div>
+                          <div style={{fontSize:'12px',color:'#5c4a32',fontWeight:500}}>{tiposLabel[s.tipo] || s.tipo}</div>
+                          {s.comentario && <div style={{fontSize:'11px',color:'#a89070',fontStyle:'italic',marginTop:'2px'}}>"{s.comentario}"</div>}
+                        </div>
+                        <div style={{fontSize:'13px',fontWeight:700,color:'#2c1f0e'}}>{dias} <span style={{fontSize:'11px',fontWeight:400,color:'#8a7560'}}>día{dias!==1?'s':''}</span></div>
+                        <div style={{display:'inline-flex',alignItems:'center',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'3px 10px'}}>
+                          <span style={{fontSize:'11px',fontWeight:600,color:estadoColor.text,whiteSpace:'nowrap'}}>{estadoColor.label}</span>
                         </div>
                       </div>
-
-                      {/* Acciones para pendientes */}
+                      {s.comentario_admin && (
+                        <div style={{fontSize:'12px',marginBottom: s.estado==='pendiente'?'10px':'0',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border,color:estadoColor.text}}>
+                          <strong>Respuesta:</strong> {s.comentario_admin}
+                        </div>
+                      )}
                       {s.estado === 'pendiente' && (
                         <VacacionAcciones sol={s} accionVacacion={accionVacacion} vacAccionMsg={vacAccionMsg} />
                       )}
@@ -1109,7 +1199,8 @@ export default function Admin() {
               </div>
             )}
           </div>
-        )}
+          )
+        })()}
       </div>
     </div>
   )
