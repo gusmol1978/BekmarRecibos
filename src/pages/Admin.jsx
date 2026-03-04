@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 import { createClient } from '@supabase/supabase-js'
@@ -13,6 +13,22 @@ const supabaseNoSession = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 )
 
+function FirmaAdminBadge({ recibo }) {
+  if (recibo.firmado) {
+    const tipo = recibo.firmado_tipo === 'fisico' ? 'Física' : 'Digital'
+    const fecha = recibo.firmado_at
+      ? new Date(recibo.firmado_at).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+      : ''
+    return (
+      <div style={{display:'flex',flexDirection:'column',gap:'1px'}}>
+        <span style={{fontSize:'12px',color:'#16a34a',fontWeight:600}}>✓ {tipo}</span>
+        {fecha && <span style={{fontSize:'10px',color:'#86efac'}}>{fecha}</span>}
+      </div>
+    )
+  }
+  return <span style={{fontSize:'12px',color:'#d97706',fontWeight:500}}>⏳ Pendiente</span>
+}
+
 export default function Admin() {
   const { user, profile, signOut } = useAuth()
   const navigate = useNavigate()
@@ -26,6 +42,7 @@ export default function Admin() {
   const [filtroUsuario, setFiltroUsuario] = useState('')
   const [filtroMes, setFiltroMes] = useState('')
   const [filtroAnio, setFiltroAnio] = useState('')
+  const [filtroFirmado, setFiltroFirmado] = useState('')
   const [sortBy, setSortBy] = useState('fecha')
   const [sortDir, setSortDir] = useState('desc')
   const [editingUser, setEditingUser] = useState(null)
@@ -44,19 +61,19 @@ export default function Admin() {
   const [creatingUser, setCreatingUser] = useState(false)
   const [newUserMsg, setNewUserMsg] = useState('')
   const [listMsg, setListMsg] = useState('')
-  const [resetPassId, setResetPassId] = useState(null)   // id del empleado con modal abierto
-  const [resetPassMsg, setResetPassMsg] = useState({})   // {userId: msg}
-  const [empleadosTab, setEmpleadosTab] = useState('activos') // 'activos' | 'inactivos'
+  const [resetPassId, setResetPassId] = useState(null)
+  const [resetPassMsg, setResetPassMsg] = useState({})
+  const [empleadosTab, setEmpleadosTab] = useState('activos')
 
   // Subida masiva
-  const [subirMode, setSubirMode] = useState('individual') // 'individual' | 'masiva'
-  const [bulkPeriodo, setBulkPeriodo] = useState('')       // YYYY-MM
+  const [subirMode, setSubirMode] = useState('individual')
+  const [bulkPeriodo, setBulkPeriodo] = useState('')
   const [bulkDescripcion, setBulkDescripcion] = useState('Liquidacion de haberes')
-  const [bulkCsvRows, setBulkCsvRows] = useState([])       // [{email, nombre_completo, monto, descripcion, archivo}]
-  const [bulkPdfMap, setBulkPdfMap] = useState({})         // {filename: File}
+  const [bulkCsvRows, setBulkCsvRows] = useState([])
+  const [bulkPdfMap, setBulkPdfMap] = useState({})
   const [bulkUploading, setBulkUploading] = useState(false)
-  const [bulkProgress, setBulkProgress] = useState(null)  // {current, total}
-  const [bulkResults, setBulkResults] = useState([])       // [{nombre, email, archivo, status, msg}]
+  const [bulkProgress, setBulkProgress] = useState(null)
+  const [bulkResults, setBulkResults] = useState([])
   const [bulkMsg, setBulkMsg] = useState('')
 
   useEffect(() => {
@@ -195,13 +212,11 @@ export default function Admin() {
       setCreatingUser(false)
       return
     }
-    // Detectar si el email ya existia (Supabase devuelve identities vacío en ese caso)
     if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
       setNewUserMsg('Error: Ya existe un usuario registrado con ese email')
       setCreatingUser(false)
       return
     }
-    // Actualizar nombre_completo en profiles
     if (newUserForm.nombre_completo) {
       await new Promise(res => setTimeout(res, 800))
       await supabase.from('profiles')
@@ -224,10 +239,43 @@ export default function Admin() {
     setResetPassId(null)
   }
 
+  async function validarFirmaFisica(r) {
+    const nombre = r.profiles?.nombre_completo || r.profiles?.email || 'este empleado'
+    if (!window.confirm(`¿Validar firma física del recibo de ${nombre}?\n\nEsto registrará que el empleado firmó el recibo en papel.`)) return
+    const { error } = await supabase.from('recibos').update({
+      firmado: true,
+      firmado_at: new Date().toISOString(),
+      firmado_tipo: 'fisico'
+    }).eq('id', r.id)
+    if (error) setListMsg('Error al validar firma: ' + error.message)
+    else fetchRecibos()
+  }
+
+  function enviarAviso(u) {
+    const sinFirmar = recibos.filter(r => r.user_id === u.id && !r.firmado)
+    const count = sinFirmar.length
+    if (count === 0) {
+      alert(`${u.nombre_completo || u.email} no tiene recibos pendientes de firma.`)
+      return
+    }
+    const subject = encodeURIComponent('Recibos pendientes de firma - Bekmar Distribuciones')
+    const body = encodeURIComponent(
+      `Hola ${u.nombre_completo || ''},\n\n` +
+      `Tenés ${count} recibo${count !== 1 ? 's' : ''} pendiente${count !== 1 ? 's' : ''} de firma en el Portal de Recibos de Bekmar Distribuciones.\n\n` +
+      `Por favor ingresá al portal para revisarlos y firmarlos:\n${window.location.origin}\n\n` +
+      `Saludos,\nRRHH - Bekmar Distribuciones`
+    )
+    window.open(`mailto:${u.email}?subject=${subject}&body=${body}`)
+  }
+
   // ── SUBIDA MASIVA ──────────────────────────────────────────────
 
   const usuariosActivos   = usuarios.filter(u => u.activo !== false)
   const usuariosInactivos = usuarios.filter(u => u.activo === false)
+
+  function countSinFirmar(userId) {
+    return recibos.filter(r => r.user_id === userId && !r.firmado).length
+  }
 
   function downloadPlantilla() {
     const wsData = [
@@ -235,9 +283,7 @@ export default function Admin() {
       ...usuariosActivos.map(u => [u.email, u.nombre_completo || '', '', 'Liquidacion de haberes', ''])
     ]
     const ws = XLSX.utils.aoa_to_sheet(wsData)
-    // Ancho de columnas
     ws['!cols'] = [{ wch: 32 }, { wch: 26 }, { wch: 12 }, { wch: 28 }, { wch: 22 }]
-    // Estilo cabecera (negrita) — requiere SheetJS Pro para estilos avanzados, pero el ancho ya ayuda
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Recibos')
     XLSX.writeFile(wb, `plantilla_recibos${bulkPeriodo ? '_' + bulkPeriodo : ''}.xlsx`)
@@ -252,7 +298,6 @@ export default function Admin() {
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '' })
         if (rawRows.length === 0) { setBulkMsg('El archivo Excel no tiene datos.'); return }
-        // Normalizar nombres de columnas a minúsculas sin espacios
         const rows = rawRows.map(row => {
           const obj = {}
           Object.keys(row).forEach(k => { obj[k.toLowerCase().trim()] = String(row[k] ?? '').trim() })
@@ -293,7 +338,6 @@ export default function Admin() {
         results.push({ nombre: emp.nombre_completo || emp.email, email: emp.email, archivo: row.archivo, status: 'error', msg: `Archivo "${row.archivo}" no seleccionado` })
         continue
       }
-      // Renombrar: bonilla.pdf → bonilla_2026-03.pdf
       const ext = pdfFile.name.split('.').pop()
       const base = pdfFile.name.replace(/\.[^/.]+$/, '')
       const storedName = `${base}_${bulkPeriodo}.${ext}`
@@ -347,6 +391,8 @@ export default function Admin() {
         if (filtroMes && (d.getMonth() + 1) !== parseInt(filtroMes)) return false
         if (filtroAnio && d.getFullYear() !== parseInt(filtroAnio)) return false
       }
+      if (filtroFirmado === 'si' && !r.firmado) return false
+      if (filtroFirmado === 'no' && r.firmado) return false
       return true
     })
     .sort((a, b) => {
@@ -384,12 +430,14 @@ export default function Admin() {
   const lbl = { fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em' }
   const tabStyle = (t) => ({ padding: isMobile ? '8px 12px' : '10px 20px',fontSize:'13px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',color:activeTab===t?'#2c1f0e':'#a89070',borderBottom:activeTab===t?'2px solid #c8a96e':'2px solid transparent' })
   const btnSm = (variant) => ({
-    background: variant === 'primary' ? '#0f1f3d' : 'transparent',
-    color: variant === 'primary' ? '#fff' : variant === 'danger' ? '#b53a2f' : '#0f1f3d',
-    border: variant === 'primary' ? 'none' : `1.5px solid ${variant === 'danger' ? '#e2d9cc' : '#0f1f3d'}`,
+    background: variant === 'primary' ? '#0f1f3d' : variant === 'green' ? '#16a34a' : 'transparent',
+    color: variant === 'primary' ? '#fff' : variant === 'green' ? '#fff' : variant === 'danger' ? '#b53a2f' : '#0f1f3d',
+    border: (variant === 'primary' || variant === 'green') ? 'none' : `1.5px solid ${variant === 'danger' ? '#e2d9cc' : '#0f1f3d'}`,
     borderRadius:'3px', padding:'6px 10px', fontSize:'12px', cursor:'pointer',
     fontFamily:'"DM Sans",sans-serif', whiteSpace:'nowrap'
   })
+
+  const hayFiltrosLista = filtroUsuario || filtroMes || filtroAnio || filtroFirmado
 
   return (
     <div style={{minHeight:'100vh',background:'#f7f4ef',fontFamily:'"DM Sans",sans-serif'}}>
@@ -487,7 +535,6 @@ export default function Admin() {
                 <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'22px',fontWeight:400,color:'#2c1f0e',margin:'0 0 6px'}}>Subida Masiva de Recibos</h2>
                 <p style={{color:'#8a7560',fontSize:'13px',margin:'0 0 24px'}}>Subí los recibos de todos los empleados para un mismo período en un solo paso.</p>
 
-                {/* Configuración del período */}
                 <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
                   <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'14px'}}>1. Configurá el período</div>
                   <div style={{display:'flex',gap:'16px',flexWrap:'wrap',alignItems:'flex-end'}}>
@@ -502,7 +549,6 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Plantilla CSV */}
                 <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
                   <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'6px'}}>2. Descargá la plantilla Excel</div>
                   <p style={{color:'#8a7560',fontSize:'13px',margin:'0 0 14px'}}>Tiene todos los empleados cargados. Completá la columna <strong>monto</strong> y <strong>archivo</strong> (nombre del PDF de cada empleado, ej: bonilla.pdf).</p>
@@ -515,7 +561,6 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Cargar archivos */}
                 <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',padding:'20px',marginBottom:'20px'}}>
                   <div style={{fontWeight:600,fontSize:'13px',color:'#2c1f0e',marginBottom:'14px'}}>3. Cargá el CSV completado y los PDFs</div>
                   <div style={{display:'flex',gap:'16px',flexWrap:'wrap'}}>
@@ -532,7 +577,6 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Preview */}
                 {bulkPreview.length > 0 && bulkResults.length === 0 && (
                   <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',overflow:'hidden',marginBottom:'20px'}}>
                     <div style={{padding:'12px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',display:'grid',gridTemplateColumns:'1fr 1fr 100px 80px',gap:'12px'}}>
@@ -562,7 +606,6 @@ export default function Admin() {
 
                 {bulkMsg && <p style={{margin:'0 0 16px',padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:'#fdf2f2',color:'#b53a2f',borderLeft:'3px solid #b53a2f'}}>{bulkMsg}</p>}
 
-                {/* Progreso */}
                 {bulkUploading && bulkProgress && (
                   <div style={{marginBottom:'16px'}}>
                     <div style={{fontSize:'13px',color:'#5c4a32',marginBottom:'6px'}}>Subiendo {bulkProgress.current} de {bulkProgress.total}...</div>
@@ -572,7 +615,6 @@ export default function Admin() {
                   </div>
                 )}
 
-                {/* Resultados */}
                 {bulkResults.length > 0 && (
                   <div style={{marginBottom:'20px'}}>
                     <div style={{background:'#fff',border:'1px solid #ede6d8',borderRadius:'4px',overflow:'hidden',marginBottom:'12px'}}>
@@ -598,7 +640,6 @@ export default function Admin() {
                   </div>
                 )}
 
-                {/* Botón subir */}
                 {bulkResults.length === 0 && (
                   <button onClick={handleBulkUpload} disabled={bulkUploading || bulkReadyCount === 0}
                     style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'13px 28px',fontSize:'14px',fontWeight:500,cursor:bulkReadyCount===0?'not-allowed':'pointer',fontFamily:'"DM Sans",sans-serif',opacity:bulkUploading||bulkReadyCount===0?0.5:1}}>
@@ -629,8 +670,13 @@ export default function Admin() {
                   <option value="">Todos los años</option>
                   {aniosDisponibles.map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
-                {(filtroUsuario || filtroMes || filtroAnio) && (
-                  <button onClick={() => { setFiltroUsuario(''); setFiltroMes(''); setFiltroAnio('') }} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 12px',fontSize:'12px',color:'#8a7560',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Limpiar</button>
+                <select value={filtroFirmado} onChange={e => setFiltroFirmado(e.target.value)} style={inpSm}>
+                  <option value="">Todos (firma)</option>
+                  <option value="no">⏳ Sin firmar</option>
+                  <option value="si">✓ Firmados</option>
+                </select>
+                {hayFiltrosLista && (
+                  <button onClick={() => { setFiltroUsuario(''); setFiltroMes(''); setFiltroAnio(''); setFiltroFirmado('') }} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 12px',fontSize:'12px',color:'#8a7560',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Limpiar</button>
                 )}
               </div>
             </div>
@@ -641,7 +687,7 @@ export default function Admin() {
               </div>
             )}
 
-          {recibosFiltrados.length === 0 ? (
+            {recibosFiltrados.length === 0 ? (
               <p style={{color:'#a89070'}}>No hay recibos para los filtros seleccionados.</p>
             ) : isMobile ? (
               /* Vista mobile: tarjetas */
@@ -683,12 +729,16 @@ export default function Admin() {
                             <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
                             <div style={{fontSize:'12px',color:'#a89070'}}>{fmtFechaCorta(r.fecha)} · {r.descripcion || 'Liquidacion'}</div>
                           </div>
-                          {r.monto && <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600,flexShrink:0}}>$ {parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>}
+                          <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
+                            {r.monto && <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600}}>$ {parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>}
+                            <FirmaAdminBadge recibo={r} />
+                          </div>
                         </div>
                         <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
                           <button onClick={() => viewRecibo(r)} style={btnSm('outline')}>Ver</button>
                           <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{...btnSm('primary'),opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'Descargar'}</button>
                           <button onClick={() => startEditRecibo(r)} style={btnSm('outline')}>Editar</button>
+                          {!r.firmado && <button onClick={() => validarFirmaFisica(r)} style={btnSm('green')}>✓ Firma física</button>}
                           <button onClick={() => deleteRecibo(r)} style={btnSm('danger')}>✕</button>
                         </div>
                       </div>
@@ -699,7 +749,7 @@ export default function Admin() {
             ) : (
               /* Vista desktop: tabla */
               <div style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',overflow:'hidden'}}>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 130px 160px 110px 190px',padding:'10px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',gap:'12px'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 120px 150px 100px 120px 230px',padding:'10px 20px',background:'#f7f4ef',borderBottom:'1px solid #ede6d8',gap:'12px'}}>
                   <button onClick={() => toggleSort('nombre')} style={{background:'none',border:'none',cursor:'pointer',textAlign:'left',fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'"DM Sans",sans-serif',padding:0}}>
                     Empleado <SortIcon col="nombre" />
                   </button>
@@ -708,6 +758,7 @@ export default function Admin() {
                   </button>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Descripcion</div>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Monto</div>
+                  <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Firma</div>
                   <div style={{fontSize:'11px',fontWeight:600,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.08em'}}>Acciones</div>
                 </div>
                 {recibosFiltrados.map((r, i) => (
@@ -740,7 +791,7 @@ export default function Admin() {
                       </div>
                     </div>
                   ) : (
-                    <div key={r.id} style={{display:'grid',gridTemplateColumns:'1fr 130px 160px 110px 220px',padding:'13px 20px',gap:'12px',alignItems:'center',borderBottom:i < recibosFiltrados.length-1 ? '1px solid #f3ede3' : 'none',background:i%2===0?'#fff':'#fdfbf8'}}>
+                    <div key={r.id} style={{display:'grid',gridTemplateColumns:'1fr 120px 150px 100px 120px 230px',padding:'13px 20px',gap:'12px',alignItems:'center',borderBottom:i < recibosFiltrados.length-1 ? '1px solid #f3ede3' : 'none',background:i%2===0?'#fff':'#fdfbf8'}}>
                       <div>
                         <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{r.profiles && (r.profiles.nombre_completo || r.profiles.email)}</div>
                         {r.profiles && r.profiles.nombre_completo && <div style={{fontSize:'11px',color:'#a89070'}}>{r.profiles.email}</div>}
@@ -748,10 +799,12 @@ export default function Admin() {
                       <div style={{fontSize:'13px',color:'#5c4a32'}}>{fmtFecha(r.fecha)}</div>
                       <div style={{fontSize:'13px',color:'#8a7560'}}>{r.descripcion || 'Liquidacion'}</div>
                       <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600}}>{r.monto ? '$ '+parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2}) : '—'}</div>
-                      <div style={{display:'flex',gap:'5px'}}>
+                      <div><FirmaAdminBadge recibo={r} /></div>
+                      <div style={{display:'flex',gap:'4px',flexWrap:'wrap'}}>
                         <button onClick={() => viewRecibo(r)} style={btnSm('outline')}>Ver</button>
-                        <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{...btnSm('primary'),opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'Descargar'}</button>
+                        <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{...btnSm('primary'),opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'↓'}</button>
                         <button onClick={() => startEditRecibo(r)} style={btnSm('outline')}>Editar</button>
+                        {!r.firmado && <button onClick={() => validarFirmaFisica(r)} title="Validar firma física" style={btnSm('green')}>✓ Fís.</button>}
                         <button onClick={() => deleteRecibo(r)} style={btnSm('danger')}>✕</button>
                       </div>
                     </div>
@@ -797,35 +850,15 @@ export default function Admin() {
                   <div style={{display:'flex',gap:'12px',flexWrap: isMobile ? 'wrap' : 'nowrap'}}>
                     <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'200px'}}>
                       <label style={lbl}>Nombre completo</label>
-                      <input
-                        type="text"
-                        value={newUserForm.nombre_completo}
-                        onChange={e => setNewUserForm({...newUserForm, nombre_completo: e.target.value})}
-                        placeholder="Juan Perez"
-                        style={inp}
-                      />
+                      <input type="text" value={newUserForm.nombre_completo} onChange={e => setNewUserForm({...newUserForm, nombre_completo: e.target.value})} placeholder="Juan Perez" style={inp} />
                     </div>
                     <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'200px'}}>
                       <label style={lbl}>Email *</label>
-                      <input
-                        type="email"
-                        value={newUserForm.email}
-                        onChange={e => setNewUserForm({...newUserForm, email: e.target.value})}
-                        placeholder="empleado@bekmar.com"
-                        required
-                        style={inp}
-                      />
+                      <input type="email" value={newUserForm.email} onChange={e => setNewUserForm({...newUserForm, email: e.target.value})} placeholder="empleado@bekmar.com" required style={inp} />
                     </div>
                     <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'180px'}}>
                       <label style={lbl}>Contraseña temporal *</label>
-                      <input
-                        type="text"
-                        value={newUserForm.password}
-                        onChange={e => setNewUserForm({...newUserForm, password: e.target.value})}
-                        placeholder="Min. 6 caracteres"
-                        required
-                        style={inp}
-                      />
+                      <input type="text" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} placeholder="Min. 6 caracteres" required style={inp} />
                     </div>
                   </div>
                   {newUserMsg && (
@@ -840,79 +873,97 @@ export default function Admin() {
                   </div>
                 </form>
                 <p style={{fontSize:'11px',color:'#a89070',margin:'12px 0 0'}}>
-                  Nota: si la confirmacion de email esta activada en Supabase, el empleado recibira un email para confirmar su cuenta antes de poder ingresar. Para desactivarla, ir a Authentication → Email → Confirm email en tu proyecto de Supabase.
+                  Nota: si la confirmacion de email esta activada en Supabase, el empleado recibira un email para confirmar su cuenta antes de poder ingresar.
                 </p>
               </div>
             )}
 
             {editMsg && <p style={{margin:'0 0 14px',padding:'10px 12px',borderRadius:'3px',fontSize:'13px',background:editMsg.startsWith('OK')?'#f0fdf0':'#fdf2f2',color:editMsg.startsWith('OK')?'#2a7a2a':'#b53a2f',borderLeft:'3px solid '+(editMsg.startsWith('OK')?'#2a7a2a':'#b53a2f')}}>{editMsg.startsWith('OK')?editMsg.slice(3):editMsg}</p>}
             <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-              {(empleadosTab === 'activos' ? usuariosActivos : usuariosInactivos).map(u => (
-                <div key={u.id} style={{background:'#fff',borderRadius:'4px',padding:'16px 20px',border:'1px solid #ede6d8',opacity: u.activo === false ? 0.65 : 1}}>
-                  {editingUser === u.id ? (
-                    <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-                      <div style={{display:'flex',gap:'12px',flexWrap:'wrap'}}>
-                        <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
-                          <label style={lbl}>Nombre completo</label>
-                          <input value={editForm.nombre_completo} onChange={e => setEditForm({...editForm,nombre_completo:e.target.value})} style={{...inp,width:'auto'}} placeholder="Nombre y Apellido" />
-                        </div>
-                        <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
-                          <label style={lbl}>Telefono</label>
-                          <input value={editForm.telefono} onChange={e => setEditForm({...editForm,telefono:e.target.value})} style={{...inp,width:'auto'}} placeholder="+598 9X XXX XXX" />
-                        </div>
-                        <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'200px'}}>
-                          <label style={lbl}>Email (no editable)</label>
-                          <input value={u.email} disabled style={{...inp,width:'auto',background:'#f0ece6',color:'#a89070',cursor:'not-allowed'}} />
-                        </div>
-                      </div>
-                      <div style={{display:'flex',gap:'8px'}}>
-                        <button onClick={() => saveUser(u)} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'8px 18px',fontSize:'13px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Guardar</button>
-                        <button onClick={() => { setEditingUser(null); setEditMsg('') }} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Cancelar</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
-                          <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>
-                            {u.nombre_completo || <span style={{color:'#a89070',fontStyle:'italic',fontWeight:400}}>Sin nombre</span>}
+              {(empleadosTab === 'activos' ? usuariosActivos : usuariosInactivos).map(u => {
+                const sinFirmar = countSinFirmar(u.id)
+                return (
+                  <div key={u.id} style={{background:'#fff',borderRadius:'4px',padding:'16px 20px',border:'1px solid #ede6d8',opacity: u.activo === false ? 0.65 : 1}}>
+                    {editingUser === u.id ? (
+                      <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+                        <div style={{display:'flex',gap:'12px',flexWrap:'wrap'}}>
+                          <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
+                            <label style={lbl}>Nombre completo</label>
+                            <input value={editForm.nombre_completo} onChange={e => setEditForm({...editForm,nombre_completo:e.target.value})} style={{...inp,width:'auto'}} placeholder="Nombre y Apellido" />
                           </div>
-                          {u.activo === false && <span style={{fontSize:'11px',background:'#fdf2f2',color:'#b53a2f',padding:'2px 7px',borderRadius:'10px',fontWeight:500}}>Sin acceso</span>}
-                        </div>
-                        <div style={{fontSize:'12px',color:'#a89070',marginTop:'2px'}}>{u.email}</div>
-                        {u.telefono && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'2px'}}>Tel: {u.telefono}</div>}
-                      </div>
-                      <div style={{display:'flex',alignItems:'center',gap:'10px',flexShrink:0}}>
-                        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
-                          <Toggle activo={u.activo} onClick={() => toggleActivo(u)} />
-                          <span style={{fontSize:'10px',color:'#a89070'}}>{u.activo !== false ? 'Activo' : 'Bloqueado'}</span>
-                        </div>
-                        <button
-                          onClick={() => { setEditingUser(u.id); setEditForm({ nombre_completo: u.nombre_completo || '', telefono: u.telefono || '' }); setEditMsg('') }}
-                          style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 14px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
-                        >Editar</button>
-                        {resetPassId === u.id ? (
-                          <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
-                            <span style={{fontSize:'12px',color:'#5c4a32'}}>¿Enviar reset a {u.email}?</span>
-                            <button onClick={() => sendResetPassword(u)} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'5px 10px',fontSize:'11px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Sí, enviar</button>
-                            <button onClick={() => setResetPassId(null)} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'5px 8px',fontSize:'11px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>No</button>
+                          <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
+                            <label style={lbl}>Telefono</label>
+                            <input value={editForm.telefono} onChange={e => setEditForm({...editForm,telefono:e.target.value})} style={{...inp,width:'auto'}} placeholder="+598 9X XXX XXX" />
                           </div>
-                        ) : (
+                          <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'200px'}}>
+                            <label style={lbl}>Email (no editable)</label>
+                            <input value={u.email} disabled style={{...inp,width:'auto',background:'#f0ece6',color:'#a89070',cursor:'not-allowed'}} />
+                          </div>
+                        </div>
+                        <div style={{display:'flex',gap:'8px'}}>
+                          <button onClick={() => saveUser(u)} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'8px 18px',fontSize:'13px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Guardar</button>
+                          <button onClick={() => { setEditingUser(null); setEditMsg('') }} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Cancelar</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px'}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+                            <div style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>
+                              {u.nombre_completo || <span style={{color:'#a89070',fontStyle:'italic',fontWeight:400}}>Sin nombre</span>}
+                            </div>
+                            {u.activo === false && <span style={{fontSize:'11px',background:'#fdf2f2',color:'#b53a2f',padding:'2px 7px',borderRadius:'10px',fontWeight:500}}>Sin acceso</span>}
+                            {sinFirmar > 0 && (
+                              <span style={{fontSize:'11px',background:'#fffbeb',color:'#d97706',padding:'2px 7px',borderRadius:'10px',fontWeight:600,border:'1px solid #fcd34d'}}>
+                                ⏳ {sinFirmar} sin firmar
+                              </span>
+                            )}
+                          </div>
+                          <div style={{fontSize:'12px',color:'#a89070',marginTop:'2px'}}>{u.email}</div>
+                          {u.telefono && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'2px'}}>Tel: {u.telefono}</div>}
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
+                            <Toggle activo={u.activo} onClick={() => toggleActivo(u)} />
+                            <span style={{fontSize:'10px',color:'#a89070'}}>{u.activo !== false ? 'Activo' : 'Bloqueado'}</span>
+                          </div>
                           <button
-                            onClick={() => { setResetPassId(u.id); setResetPassMsg(prev => ({...prev, [u.id]: ''})) }}
-                            style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 14px',fontSize:'12px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
-                          >Reset pass</button>
-                        )}
-                        {resetPassMsg[u.id] && resetPassMsg[u.id] !== 'enviando' && (
-                          <span style={{fontSize:'11px',color:resetPassMsg[u.id].startsWith('OK')?'#2a7a2a':'#b53a2f'}}>
-                            {resetPassMsg[u.id].startsWith('OK') ? resetPassMsg[u.id].slice(3) : resetPassMsg[u.id]}
-                          </span>
-                        )}
+                            onClick={() => { setEditingUser(u.id); setEditForm({ nombre_completo: u.nombre_completo || '', telefono: u.telefono || '' }); setEditMsg('') }}
+                            style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
+                          >Editar</button>
+                          {/* Enviar aviso de recibos sin firmar */}
+                          {sinFirmar > 0 && u.activo !== false && (
+                            <button
+                              onClick={() => enviarAviso(u)}
+                              title={`Enviar aviso por email: ${sinFirmar} recibo${sinFirmar !== 1 ? 's' : ''} sin firmar`}
+                              style={{background:'#fffbeb',border:'1.5px solid #fcd34d',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',color:'#92400e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',fontWeight:500}}
+                            >
+                              ✉ Avisar
+                            </button>
+                          )}
+                          {resetPassId === u.id ? (
+                            <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+                              <span style={{fontSize:'12px',color:'#5c4a32'}}>¿Enviar reset?</span>
+                              <button onClick={() => sendResetPassword(u)} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'5px 10px',fontSize:'11px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Sí</button>
+                              <button onClick={() => setResetPassId(null)} style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'5px 8px',fontSize:'11px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>No</button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setResetPassId(u.id); setResetPassMsg(prev => ({...prev, [u.id]: ''})) }}
+                              style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}
+                            >Reset pass</button>
+                          )}
+                          {resetPassMsg[u.id] && resetPassMsg[u.id] !== 'enviando' && (
+                            <span style={{fontSize:'11px',color:resetPassMsg[u.id].startsWith('OK')?'#2a7a2a':'#b53a2f'}}>
+                              {resetPassMsg[u.id].startsWith('OK') ? resetPassMsg[u.id].slice(3) : resetPassMsg[u.id]}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}

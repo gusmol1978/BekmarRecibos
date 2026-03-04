@@ -12,6 +12,28 @@ function SortIcon({ direction }) {
   return <span style={{color:'#c8a96e',fontSize:'11px',marginLeft:'4px'}}>{direction === 'asc' ? '↑' : '↓'}</span>
 }
 
+function FirmaBadge({ recibo }) {
+  if (recibo.firmado) {
+    const tipo = recibo.firmado_tipo === 'fisico' ? 'Firma física' : 'Firmado'
+    const fecha = recibo.firmado_at
+      ? new Date(recibo.firmado_at).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+      : ''
+    return (
+      <div style={{display:'flex',alignItems:'center',gap:'5px',background:'#f0fdf4',border:'1px solid #86efac',borderRadius:'20px',padding:'4px 10px',flexShrink:0}}>
+        <span style={{color:'#16a34a',fontSize:'12px'}}>✓</span>
+        <span style={{color:'#16a34a',fontSize:'11px',fontWeight:600}}>{tipo}</span>
+        {fecha && <span style={{color:'#4ade80',fontSize:'10px'}}>{fecha}</span>}
+      </div>
+    )
+  }
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'5px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:'20px',padding:'4px 10px',flexShrink:0}}>
+      <span style={{color:'#d97706',fontSize:'12px'}}>⏳</span>
+      <span style={{color:'#d97706',fontSize:'11px',fontWeight:600}}>Sin firmar</span>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const { user, profile, signOut } = useAuth()
   const navigate = useNavigate()
@@ -26,6 +48,12 @@ export default function Dashboard() {
   const [passForm, setPassForm] = useState({ nueva: '', confirmar: '' })
   const [passMsg, setPassMsg] = useState('')
   const [passLoading, setPassLoading] = useState(false)
+
+  // Firma digital
+  const [firmandoId, setFirmandoId] = useState(null)
+  const [firmaPass, setFirmaPass] = useState('')
+  const [firmaMsg, setFirmaMsg] = useState('')
+  const [firmaLoading, setFirmaLoading] = useState(false)
 
   // Filtros
   const [filtroMes, setFiltroMes] = useState('')
@@ -70,6 +98,33 @@ export default function Dashboard() {
   async function viewRecibo(recibo) {
     const { data } = await supabase.storage.from('recibos-pdf').createSignedUrl(recibo.archivo_path, 300)
     if (data && data.signedUrl) setPdfUrl(data.signedUrl)
+  }
+
+  async function handleFirmar(recibo) {
+    if (!firmaPass) { setFirmaMsg('Ingresá tu contraseña para firmar'); return }
+    setFirmaLoading(true); setFirmaMsg('')
+    // Verificar identidad re-autenticando con la contraseña
+    const { error: authError } = await supabase.auth.signInWithPassword({ email: user.email, password: firmaPass })
+    if (authError) {
+      setFirmaMsg('Contraseña incorrecta. Intentá nuevamente.')
+      setFirmaLoading(false)
+      return
+    }
+    // Registrar la firma digital
+    const { error } = await supabase.from('recibos').update({
+      firmado: true,
+      firmado_at: new Date().toISOString(),
+      firmado_tipo: 'digital'
+    }).eq('id', recibo.id).eq('user_id', user.id)
+    if (error) {
+      setFirmaMsg('Error al registrar la firma: ' + error.message)
+    } else {
+      setFirmandoId(null)
+      setFirmaPass('')
+      setFirmaMsg('')
+      fetchRecibos()
+    }
+    setFirmaLoading(false)
   }
 
   function handleSort(field) {
@@ -162,7 +217,7 @@ export default function Dashboard() {
         <div style={{maxWidth:'960px',margin:'0 auto',padding:'0 24px'}}>
           <div style={{marginBottom:'24px'}}>
             <h2 style={{fontFamily:'"DM Serif Display",serif',fontSize:'28px',fontWeight:400,color:'#2c1f0e',margin:'0 0 6px'}}>Mis Recibos de Sueldo</h2>
-            <p style={{color:'#8a7560',fontSize:'14px',margin:0}}>Accede y descarga tus liquidaciones de haberes</p>
+            <p style={{color:'#8a7560',fontSize:'14px',margin:0}}>Accedé, descargá y firmá tus liquidaciones de haberes</p>
           </div>
 
           {/* Filtros */}
@@ -238,19 +293,66 @@ export default function Dashboard() {
           ) : (
             <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
               {recibosFiltrados.map(r => (
-                <div key={r.id} style={{background:'#fff',borderRadius:'4px',padding:'18px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',boxShadow:'0 1px 4px rgba(44,31,14,0.05)',border:'1px solid #ede6d8',gap:'16px'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'16px',flex:1,minWidth:0}}>
-                    <div style={{background:'#0f1f3d',color:'#7eb3ff',borderRadius:'3px',padding:'6px 8px',fontSize:'10px',fontWeight:700,letterSpacing:'0.05em',flexShrink:0}}>PDF</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:'15px',fontWeight:600,color:'#2c1f0e',marginBottom:'2px'}}>{formatFecha(r.fecha)}</div>
-                      <div style={{fontSize:'12px',color:'#a89070',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.descripcion || 'Liquidacion de haberes'}</div>
-                      {r.monto && <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600,marginTop:'4px'}}>$ {parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>}
+                <div key={r.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',boxShadow:'0 1px 4px rgba(44,31,14,0.05)',overflow:'hidden'}}>
+                  {/* Fila principal */}
+                  <div style={{padding:'18px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'16px',flexWrap:'wrap'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'16px',flex:1,minWidth:0}}>
+                      <div style={{background:'#0f1f3d',color:'#7eb3ff',borderRadius:'3px',padding:'6px 8px',fontSize:'10px',fontWeight:700,letterSpacing:'0.05em',flexShrink:0}}>PDF</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:'15px',fontWeight:600,color:'#2c1f0e',marginBottom:'2px'}}>{formatFecha(r.fecha)}</div>
+                        <div style={{fontSize:'12px',color:'#a89070',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.descripcion || 'Liquidacion de haberes'}</div>
+                        {r.monto && <div style={{fontSize:'13px',color:'#2a6a2a',fontWeight:600,marginTop:'4px'}}>$ {parseFloat(r.monto).toLocaleString('es-AR',{minimumFractionDigits:2})}</div>}
+                      </div>
+                    </div>
+                    <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',flexShrink:0}}>
+                      <FirmaBadge recibo={r} />
+                      <button onClick={() => viewRecibo(r)} style={{background:'transparent',border:'1.5px solid #0f1f3d',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',color:'#0f1f3d',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Ver</button>
+                      <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'Descargar'}</button>
+                      {!r.firmado && (
+                        <button
+                          onClick={() => { setFirmandoId(firmandoId === r.id ? null : r.id); setFirmaPass(''); setFirmaMsg('') }}
+                          style={{
+                            background: firmandoId === r.id ? 'transparent' : '#16a34a',
+                            color: firmandoId === r.id ? '#5c4a32' : '#fff',
+                            border: firmandoId === r.id ? '1.5px solid #e2d9cc' : 'none',
+                            borderRadius:'3px', padding:'8px 16px', fontSize:'13px', cursor:'pointer', fontFamily:'"DM Sans",sans-serif'
+                          }}
+                        >
+                          {firmandoId === r.id ? 'Cancelar' : '✍ Firmar'}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <div style={{display:'flex',gap:'8px',flexShrink:0}}>
-                    <button onClick={() => viewRecibo(r)} style={{background:'transparent',border:'1.5px solid #0f1f3d',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',color:'#0f1f3d',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>Ver</button>
-                    <button onClick={() => downloadRecibo(r)} disabled={downloading===r.id} style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:downloading===r.id?0.6:1}}>{downloading===r.id?'...':'Descargar'}</button>
-                  </div>
+
+                  {/* Panel de firma */}
+                  {firmandoId === r.id && (
+                    <div style={{borderTop:'1px solid #bbf7d0',background:'#f0fdf4',padding:'16px 24px'}}>
+                      <div style={{fontSize:'13px',color:'#15803d',fontWeight:600,marginBottom:'8px'}}>Firma digital del recibo</div>
+                      <p style={{fontSize:'12px',color:'#4b7a56',margin:'0 0 12px',lineHeight:'1.6'}}>
+                        Al firmar confirmás haber recibido y leído este recibo de sueldo. Ingresá tu contraseña de acceso para confirmar tu identidad.
+                      </p>
+                      <div style={{display:'flex',gap:'10px',alignItems:'flex-start',flexWrap:'wrap'}}>
+                        <input
+                          type="password"
+                          value={firmaPass}
+                          onChange={e => { setFirmaPass(e.target.value); setFirmaMsg('') }}
+                          placeholder="Tu contraseña de acceso"
+                          onKeyDown={e => e.key === 'Enter' && handleFirmar(r)}
+                          style={{border:'1.5px solid #bbf7d0',borderRadius:'3px',padding:'9px 13px',fontSize:'13px',color:'#2c1f0e',background:'#fff',fontFamily:'"DM Sans",sans-serif',minWidth:'220px',flex:1}}
+                        />
+                        <button
+                          onClick={() => handleFirmar(r)}
+                          disabled={firmaLoading}
+                          style={{background:'#15803d',color:'#fff',border:'none',borderRadius:'3px',padding:'9px 20px',fontSize:'13px',fontWeight:600,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:firmaLoading?0.7:1,whiteSpace:'nowrap'}}
+                        >
+                          {firmaLoading ? 'Firmando...' : 'Confirmar firma'}
+                        </button>
+                      </div>
+                      {firmaMsg && (
+                        <p style={{margin:'10px 0 0',fontSize:'12px',color:'#b53a2f',padding:'7px 10px',background:'#fdf2f2',borderLeft:'3px solid #b53a2f',borderRadius:'0 3px 3px 0'}}>{firmaMsg}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
