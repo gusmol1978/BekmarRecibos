@@ -72,15 +72,35 @@ export default function Dashboard() {
   const [vacMsg, setVacMsg] = useState('')
   const [vacLoading, setVacLoading] = useState(false)
   const [showVacForm, setShowVacForm] = useState(false)
+  const [editandoSol, setEditandoSol] = useState(null)
+  const [editVacForm, setEditVacForm] = useState({ tipo: 'vacaciones', fecha_desde: '', fecha_hasta: '', comentario: '' })
+  const [editVacMsg, setEditVacMsg] = useState('')
+  const [editVacLoading, setEditVacLoading] = useState(false)
+  const [eliminandoId, setEliminandoId] = useState(null)
   const [vacFeatureOn, setVacFeatureOn] = useState(false)
   const [vacPersonalOn, setVacPersonalOn] = useState(true)
 
   const tiposLabel = { vacaciones: 'Vacaciones', licencia_medica: 'Licencia médica', licencia_personal: 'Licencia personal', otro: 'Otro' }
 
-  function diasEntreFechas(desde, hasta) {
-    if (!desde || !hasta) return 0
-    const d1 = new Date(desde + 'T00:00:00'), d2 = new Date(hasta + 'T00:00:00')
-    return Math.max(0, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1)
+  // Feriados fijos Uruguay (MM-DD)
+  const FERIADOS_UY = ['01-01', '05-01', '07-18', '08-25', '12-25']
+
+  function esFeriadoODomingo(date) {
+    if (date.getDay() === 0) return true // domingo
+    const mmdd = String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0')
+    return FERIADOS_UY.includes(mmdd)
+  }
+
+  function diasHabiles(desde, hasta) {
+    if (!desde || !hasta || hasta < desde) return 0
+    let count = 0
+    const cur = new Date(desde + 'T00:00:00')
+    const end = new Date(hasta + 'T00:00:00')
+    while (cur <= end) {
+      if (!esFeriadoODomingo(cur)) count++
+      cur.setDate(cur.getDate() + 1)
+    }
+    return count
   }
 
   useEffect(() => { fetchRecibos(); fetchSolicitudes(); fetchVacFeature() }, [user])
@@ -121,6 +141,34 @@ export default function Dashboard() {
       fetchSolicitudes()
     }
     setVacLoading(false)
+  }
+
+  function iniciarEdicion(s) {
+    setEditandoSol(s.id)
+    setEditVacForm({ tipo: s.tipo, fecha_desde: s.fecha_desde, fecha_hasta: s.fecha_hasta, comentario: s.comentario || '' })
+    setEditVacMsg('')
+  }
+
+  async function handleGuardarEdicion(e) {
+    e.preventDefault()
+    if (!editVacForm.fecha_desde || !editVacForm.fecha_hasta) { setEditVacMsg('Ingresá las fechas'); return }
+    if (editVacForm.fecha_hasta < editVacForm.fecha_desde) { setEditVacMsg('La fecha de fin debe ser posterior al inicio'); return }
+    setEditVacLoading(true); setEditVacMsg('')
+    const { error } = await supabase.from('solicitudes_vacaciones').update({
+      tipo: editVacForm.tipo,
+      fecha_desde: editVacForm.fecha_desde,
+      fecha_hasta: editVacForm.fecha_hasta,
+      comentario: editVacForm.comentario || null
+    }).eq('id', editandoSol).eq('user_id', user.id).eq('estado', 'pendiente')
+    if (error) setEditVacMsg('Error: ' + error.message)
+    else { setEditandoSol(null); fetchSolicitudes() }
+    setEditVacLoading(false)
+  }
+
+  async function handleEliminarSolicitud(id) {
+    const { error } = await supabase.from('solicitudes_vacaciones').delete()
+      .eq('id', id).eq('user_id', user.id).eq('estado', 'pendiente')
+    if (!error) { setEliminandoId(null); fetchSolicitudes() }
   }
 
   async function fetchRecibos() {
@@ -325,7 +373,7 @@ export default function Dashboard() {
                     </div>
                     {vacForm.fecha_desde && vacForm.fecha_hasta && vacForm.fecha_hasta >= vacForm.fecha_desde && (
                       <div style={{fontSize:'13px',color:'#5c4a32',background:'#f7f4ef',padding:'8px 12px',borderRadius:'3px'}}>
-                        📅 {diasEntreFechas(vacForm.fecha_desde, vacForm.fecha_hasta)} días solicitados
+                        📅 {diasHabiles(vacForm.fecha_desde, vacForm.fecha_hasta)} días hábiles (sin domingos ni feriados)
                       </div>
                     )}
                     <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
@@ -356,32 +404,110 @@ export default function Dashboard() {
                     const estadoColor = s.estado === 'aprobada' ? { bg:'#f0fdf4',border:'#86efac',text:'#16a34a',label:'✓ Aprobada' }
                       : s.estado === 'rechazada' ? { bg:'#fdf2f2',border:'#fca5a5',text:'#b53a2f',label:'✗ Rechazada' }
                       : { bg:'#fffbeb',border:'#fcd34d',text:'#d97706',label:'⏳ Pendiente' }
-                    const dias = diasEntreFechas(s.fecha_desde, s.fecha_hasta)
+                    const dias = diasHabiles(s.fecha_desde, s.fecha_hasta)
                     return (
                       <div key={s.id} style={{background:'#fff',borderRadius:'4px',border:'1px solid #ede6d8',padding:'16px 20px'}}>
-                        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap'}}>
-                          <div style={{flex:1}}>
-                            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',flexWrap:'wrap'}}>
-                              <span style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{tiposLabel[s.tipo] || s.tipo}</span>
-                              <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
-                              <span style={{fontSize:'13px',color:'#5c4a32'}}>
-                                {new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
-                                {' → '}
-                                {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
-                              </span>
-                              <span style={{fontSize:'12px',color:'#8a7560'}}>{dias} {dias===1?'día':'días'}</span>
+                        {editandoSol === s.id ? (
+                          <form onSubmit={handleGuardarEdicion} style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+                            <div style={{fontSize:'13px',fontWeight:600,color:'#2c1f0e',marginBottom:'2px'}}>Editando solicitud</div>
+                            <div style={{display:'flex',gap:'12px',flexWrap:'wrap'}}>
+                              <div style={{display:'flex',flexDirection:'column',gap:'4px',flex:1,minWidth:'160px'}}>
+                                <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Tipo</label>
+                                <select value={editVacForm.tipo} onChange={e => setEditVacForm({...editVacForm,tipo:e.target.value})}
+                                  style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'9px 12px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}}>
+                                  <option value="vacaciones">Vacaciones</option>
+                                  <option value="licencia_medica">Licencia médica</option>
+                                  <option value="licencia_personal">Licencia personal</option>
+                                  <option value="otro">Otro</option>
+                                </select>
+                              </div>
+                              <div style={{display:'flex',flexDirection:'column',gap:'4px',minWidth:'140px'}}>
+                                <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Desde</label>
+                                <input type="date" value={editVacForm.fecha_desde} onChange={e => setEditVacForm({...editVacForm,fecha_desde:e.target.value})} required
+                                  style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'9px 12px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}} />
+                              </div>
+                              <div style={{display:'flex',flexDirection:'column',gap:'4px',minWidth:'140px'}}>
+                                <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Hasta</label>
+                                <input type="date" value={editVacForm.fecha_hasta} onChange={e => setEditVacForm({...editVacForm,fecha_hasta:e.target.value})} required
+                                  style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'9px 12px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif'}} />
+                              </div>
                             </div>
-                            {s.comentario && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'4px'}}>"{s.comentario}"</div>}
-                            {s.comentario_admin && (
-                              <div style={{fontSize:'12px',color: s.estado==='aprobada'?'#15803d':'#b53a2f',marginTop:'6px',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border}}>
-                                <strong>Admin:</strong> {s.comentario_admin}
+                            {editVacForm.fecha_desde && editVacForm.fecha_hasta && editVacForm.fecha_hasta >= editVacForm.fecha_desde && (
+                              <div style={{fontSize:'13px',color:'#5c4a32',background:'#f7f4ef',padding:'7px 12px',borderRadius:'3px'}}>
+                                📅 {diasHabiles(editVacForm.fecha_desde, editVacForm.fecha_hasta)} días hábiles (sin domingos ni feriados)
                               </div>
                             )}
+                            <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                              <label style={{fontSize:'11px',fontWeight:500,color:'#5c4a32',textTransform:'uppercase',letterSpacing:'0.09em'}}>Comentario (opcional)</label>
+                              <textarea value={editVacForm.comentario} onChange={e => setEditVacForm({...editVacForm,comentario:e.target.value})} rows={2}
+                                placeholder="Agregá un comentario o aclaración..."
+                                style={{border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'9px 12px',fontSize:'13px',color:'#2c1f0e',background:'#faf8f5',fontFamily:'"DM Sans",sans-serif',resize:'vertical'}} />
+                            </div>
+                            {editVacMsg && <p style={{margin:0,padding:'8px 12px',borderRadius:'3px',fontSize:'13px',background:'#fdf2f2',color:'#b53a2f',borderLeft:'3px solid #b53a2f'}}>{editVacMsg}</p>}
+                            <div style={{display:'flex',gap:'8px'}}>
+                              <button type="submit" disabled={editVacLoading}
+                                style={{background:'#0f1f3d',color:'#fff',border:'none',borderRadius:'3px',padding:'8px 18px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'"DM Sans",sans-serif',opacity:editVacLoading?0.7:1}}>
+                                {editVacLoading ? 'Guardando...' : 'Guardar cambios'}
+                              </button>
+                              <button type="button" onClick={() => { setEditandoSol(null); setEditVacMsg('') }}
+                                style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'8px 16px',fontSize:'13px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                                Cancelar
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap'}}>
+                            <div style={{flex:1}}>
+                              <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',flexWrap:'wrap'}}>
+                                <span style={{fontSize:'14px',fontWeight:600,color:'#2c1f0e'}}>{tiposLabel[s.tipo] || s.tipo}</span>
+                                <span style={{fontSize:'12px',color:'#a89070'}}>·</span>
+                                <span style={{fontSize:'13px',color:'#5c4a32'}}>
+                                  {new Date(s.fecha_desde+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                                  {' → '}
+                                  {new Date(s.fecha_hasta+'T00:00:00').toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                                </span>
+                                <span style={{fontSize:'12px',color:'#8a7560',fontWeight:500}}>{dias} día{dias!==1?'s':''} hábil{dias!==1?'es':''}</span>
+                              </div>
+                              {s.comentario && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'4px'}}>"{s.comentario}"</div>}
+                              {s.comentario_admin && (
+                                <div style={{fontSize:'12px',color: s.estado==='aprobada'?'#15803d':'#b53a2f',marginTop:'6px',background:estadoColor.bg,padding:'6px 10px',borderRadius:'3px',borderLeft:'3px solid '+estadoColor.border}}>
+                                  <strong>Admin:</strong> {s.comentario_admin}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'8px',flexShrink:0}}>
+                              <div style={{display:'inline-flex',alignItems:'center',gap:'5px',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'4px 12px'}}>
+                                <span style={{fontSize:'12px',fontWeight:600,color:estadoColor.text}}>{estadoColor.label}</span>
+                              </div>
+                              {s.estado === 'pendiente' && (
+                                <div style={{display:'flex',gap:'6px'}}>
+                                  <button onClick={() => iniciarEdicion(s)}
+                                    style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'5px 12px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                                    ✏ Editar
+                                  </button>
+                                  {eliminandoId === s.id ? (
+                                    <div style={{display:'flex',gap:'4px',alignItems:'center'}}>
+                                      <span style={{fontSize:'12px',color:'#b53a2f'}}>¿Eliminar?</span>
+                                      <button onClick={() => handleEliminarSolicitud(s.id)}
+                                        style={{background:'#b53a2f',color:'#fff',border:'none',borderRadius:'3px',padding:'5px 10px',fontSize:'12px',cursor:'pointer',fontFamily:'"DM Sans",sans-serif',fontWeight:600}}>
+                                        Sí
+                                      </button>
+                                      <button onClick={() => setEliminandoId(null)}
+                                        style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'5px 8px',fontSize:'12px',color:'#5c4a32',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                                        No
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button onClick={() => setEliminandoId(s.id)}
+                                      style={{background:'transparent',border:'1.5px solid #fca5a5',borderRadius:'3px',padding:'5px 12px',fontSize:'12px',color:'#b53a2f',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}>
+                                      ✕ Eliminar
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <div style={{display:'inline-flex',alignItems:'center',gap:'5px',background:estadoColor.bg,border:'1px solid '+estadoColor.border,borderRadius:'20px',padding:'4px 12px',flexShrink:0}}>
-                            <span style={{fontSize:'12px',fontWeight:600,color:estadoColor.text}}>{estadoColor.label}</span>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     )
                   })}
