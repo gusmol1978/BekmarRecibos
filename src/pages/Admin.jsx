@@ -97,7 +97,7 @@ export default function Admin() {
   }, [])
 
   async function fetchUsuarios() {
-    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo').order('nombre_completo')
+    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo, vacaciones_habilitadas').order('nombre_completo')
     setUsuarios(data || [])
   }
 
@@ -237,6 +237,12 @@ export default function Admin() {
   async function toggleActivo(u) {
     const nuevoEstado = u.activo === false ? true : false
     const { error } = await supabase.from('profiles').update({ activo: nuevoEstado }).eq('id', u.id)
+    if (!error) fetchUsuarios()
+  }
+
+  async function toggleVacacionesEmpleado(u) {
+    const nuevoEstado = u.vacaciones_habilitadas === false ? true : false
+    const { error } = await supabase.from('profiles').update({ vacaciones_habilitadas: nuevoEstado }).eq('id', u.id)
     if (!error) fetchUsuarios()
   }
 
@@ -988,6 +994,12 @@ export default function Admin() {
                             <Toggle activo={u.activo} onClick={() => toggleActivo(u)} />
                             <span style={{fontSize:'10px',color:'#a89070'}}>{u.activo !== false ? 'Activo' : 'Bloqueado'}</span>
                           </div>
+                          {vacFeatureOn && (
+                            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
+                              <Toggle activo={u.vacaciones_habilitadas !== false} onClick={() => toggleVacacionesEmpleado(u)} />
+                              <span style={{fontSize:'10px',color:'#a89070',textAlign:'center',lineHeight:'1.2'}}>Vac.</span>
+                            </div>
+                          )}
                           <button
                             onClick={() => { setEditingUser(u.id); setEditForm({ nombre_completo: u.nombre_completo || '', telefono: u.telefono || '' }); setEditMsg('') }}
                             style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}

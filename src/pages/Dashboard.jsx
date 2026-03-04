@@ -73,6 +73,7 @@ export default function Dashboard() {
   const [vacLoading, setVacLoading] = useState(false)
   const [showVacForm, setShowVacForm] = useState(false)
   const [vacFeatureOn, setVacFeatureOn] = useState(false)
+  const [vacPersonalOn, setVacPersonalOn] = useState(true)
 
   const tiposLabel = { vacaciones: 'Vacaciones', licencia_medica: 'Licencia médica', licencia_personal: 'Licencia personal', otro: 'Otro' }
 
@@ -87,6 +88,11 @@ export default function Dashboard() {
   async function fetchVacFeature() {
     const { data } = await supabase.from('feature_flags').select('enabled').eq('nombre', 'vacaciones').single()
     if (data) setVacFeatureOn(data.enabled)
+    // Leer permiso individual del empleado
+    if (user) {
+      const { data: prof } = await supabase.from('profiles').select('vacaciones_habilitadas').eq('id', user.id).single()
+      if (prof) setVacPersonalOn(prof.vacaciones_habilitadas !== false)
+    }
   }
 
   async function fetchSolicitudes() {
@@ -273,7 +279,7 @@ export default function Dashboard() {
             <button onClick={() => setActiveTab('recibos')} style={{padding:'10px 24px',fontSize:'14px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',color:activeTab==='recibos'?'#2c1f0e':'#a89070',borderBottom:activeTab==='recibos'?'2px solid #c8a96e':'2px solid transparent'}}>
               Mis Recibos
             </button>
-            {vacFeatureOn && (
+            {vacFeatureOn && vacPersonalOn && (
               <button onClick={() => setActiveTab('vacaciones')} style={{padding:'10px 24px',fontSize:'14px',fontWeight:500,cursor:'pointer',border:'none',background:'transparent',fontFamily:'"DM Sans",sans-serif',color:activeTab==='vacaciones'?'#2c1f0e':'#a89070',borderBottom:activeTab==='vacaciones'?'2px solid #c8a96e':'2px solid transparent'}}>
                 Vacaciones {solicitudes.filter(s=>s.estado==='pendiente').length > 0 && <span style={{background:'#d97706',color:'#fff',borderRadius:'10px',padding:'1px 6px',fontSize:'10px',marginLeft:'4px'}}>{solicitudes.filter(s=>s.estado==='pendiente').length}</span>}
               </button>
@@ -281,7 +287,7 @@ export default function Dashboard() {
           </div>
 
           {/* TAB VACACIONES */}
-          {activeTab === 'vacaciones' && (
+          {activeTab === 'vacaciones' && vacFeatureOn && vacPersonalOn && (
             <div>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px',flexWrap:'wrap',gap:'12px'}}>
                 <div>
