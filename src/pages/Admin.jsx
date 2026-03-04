@@ -121,7 +121,7 @@ export default function Admin() {
   }, [])
 
   async function fetchUsuarios() {
-    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo, vacaciones_habilitadas').order('nombre_completo')
+    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo, vacaciones_habilitadas, rol').order('nombre_completo')
     setUsuarios(data || [])
   }
 
@@ -268,6 +268,21 @@ export default function Admin() {
     const nuevoEstado = u.vacaciones_habilitadas === false ? true : false
     const { error } = await supabase.from('profiles').update({ vacaciones_habilitadas: nuevoEstado }).eq('id', u.id)
     if (!error) fetchUsuarios()
+  }
+
+  async function toggleRol(u) {
+    if (u.id === user.id) {
+      alert('No podés cambiar tu propio rol de administrador.')
+      return
+    }
+    const nuevoRol = u.rol === 'admin' ? 'empleado' : 'admin'
+    const accion = nuevoRol === 'admin'
+      ? `¿Dar permisos de ADMINISTRADOR a ${u.nombre_completo || u.email}?\n\nPodrá subir recibos, aprobar vacaciones y gestionar empleados.`
+      : `¿Quitar permisos de administrador a ${u.nombre_completo || u.email}?\n\nPasará a ser un empleado normal.`
+    if (!window.confirm(accion)) return
+    const { error } = await supabase.from('profiles').update({ rol: nuevoRol }).eq('id', u.id)
+    if (!error) fetchUsuarios()
+    else setEditMsg('Error al cambiar rol: ' + error.message)
   }
 
   async function createUser(e) {
@@ -1004,6 +1019,7 @@ export default function Admin() {
                               {u.nombre_completo || <span style={{color:'#a89070',fontStyle:'italic',fontWeight:400}}>Sin nombre</span>}
                             </div>
                             {u.activo === false && <span style={{fontSize:'11px',background:'#fdf2f2',color:'#b53a2f',padding:'2px 7px',borderRadius:'10px',fontWeight:500}}>Sin acceso</span>}
+                            {u.rol === 'admin' && <span style={{fontSize:'11px',background:'#ede9fe',color:'#7c3aed',padding:'2px 7px',borderRadius:'10px',fontWeight:600}}>★ Admin</span>}
                             {sinFirmar > 0 && (
                               <span style={{fontSize:'11px',background:'#fffbeb',color:'#d97706',padding:'2px 7px',borderRadius:'10px',fontWeight:600,border:'1px solid #fcd34d'}}>
                                 ⏳ {sinFirmar} sin firmar
@@ -1024,6 +1040,15 @@ export default function Admin() {
                               <span style={{fontSize:'10px',color:'#a89070',textAlign:'center',lineHeight:'1.2'}}>Vac.</span>
                             </div>
                           )}
+                          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
+                            <div
+                              onClick={() => toggleRol(u)}
+                              title={u.rol === 'admin' ? 'Quitar permisos de admin' : 'Dar permisos de admin'}
+                              style={{width:'40px',height:'22px',borderRadius:'11px',background:u.rol==='admin'?'#7c3aed':'#ccc',cursor: u.id === user.id ? 'not-allowed' : 'pointer',position:'relative',transition:'background 0.2s',flexShrink:0,opacity: u.id === user.id ? 0.5 : 1}}>
+                              <div style={{position:'absolute',top:'3px',left:u.rol==='admin'?'21px':'3px',width:'16px',height:'16px',borderRadius:'50%',background:'white',transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.25)'}} />
+                            </div>
+                            <span style={{fontSize:'10px',color: u.rol === 'admin' ? '#7c3aed' : '#a89070',textAlign:'center',lineHeight:'1.2',fontWeight: u.rol === 'admin' ? 600 : 400}}>Admin</span>
+                          </div>
                           <button
                             onClick={() => { setEditingUser(u.id); setEditForm({ nombre_completo: u.nombre_completo || '', telefono: u.telefono || '' }); setEditMsg('') }}
                             style={{background:'transparent',border:'1.5px solid #e2d9cc',borderRadius:'3px',padding:'6px 12px',fontSize:'12px',color:'#2c1f0e',cursor:'pointer',fontFamily:'"DM Sans",sans-serif'}}

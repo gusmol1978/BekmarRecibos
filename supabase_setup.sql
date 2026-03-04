@@ -51,6 +51,10 @@ CREATE POLICY "Admin ve todos los perfiles"
 CREATE POLICY "Actualizar propio perfil"
   ON profiles FOR UPDATE USING (auth.uid() = id);
 
+CREATE POLICY "Admin actualiza cualquier perfil"
+  ON profiles FOR UPDATE
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND rol = 'admin'));
+
 -- Politicas para recibos
 CREATE POLICY "Ver solo mis recibos"
   ON recibos FOR SELECT USING (auth.uid() = user_id);
@@ -84,3 +88,9 @@ CREATE POLICY "Admin elimina archivos"
 
 -- Para hacer admin a un usuario despues de que se registre:
 -- UPDATE profiles SET rol = 'admin' WHERE email = 'admin@tuempresa.com';
+
+-- IMPORTANTE: Si ya tenés el proyecto corriendo y la tabla profiles existe,
+-- ejecutá solo esta política nueva en el SQL Editor de Supabase:
+-- CREATE POLICY "Admin actualiza cualquier perfil"
+--   ON profiles FOR UPDATE
+--   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND rol = 'admin'));
