@@ -84,7 +84,7 @@ export default function Admin() {
   }, [])
 
   async function fetchUsuarios() {
-    const { data } = await supabase.from('profiles').select('id, nombre_completo, email, telefono, activo').order('nombre_completo')
+    const { data } = await supabase.from('profiles_with_last_signin').select('id, nombre_completo, email, telefono, activo, last_sign_in_at').order('nombre_completo')
     setUsuarios(data || [])
   }
 
@@ -377,6 +377,14 @@ export default function Admin() {
   const bulkReadyCount = bulkPreview.filter(r => r.ready).length
 
   // ───────────────────────────────────────────────────────────────
+
+  function lastSignInInfo(last_sign_in_at) {
+    if (!last_sign_in_at) return { label: 'Nunca ingresó', alerta: true }
+    const diff = (Date.now() - new Date(last_sign_in_at).getTime()) / (1000 * 60 * 60 * 24)
+    const fecha = new Date(last_sign_in_at).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    if (diff > 45) return { label: `Último ingreso: ${fecha}`, alerta: true }
+    return { label: `Último ingreso: ${fecha}`, alerta: false }
+  }
 
   function toggleSort(col) {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -921,6 +929,21 @@ export default function Admin() {
                           </div>
                           <div style={{fontSize:'12px',color:'#a89070',marginTop:'2px'}}>{u.email}</div>
                           {u.telefono && <div style={{fontSize:'12px',color:'#8a7560',marginTop:'2px'}}>Tel: {u.telefono}</div>}
+                          {(() => {
+                            const info = lastSignInInfo(u.last_sign_in_at)
+                            return (
+                              <div style={{
+                                display:'inline-flex',alignItems:'center',gap:'4px',marginTop:'4px',
+                                fontSize:'11px',fontWeight:600,
+                                color: info.alerta ? '#b53a2f' : '#2a6a2a',
+                                background: info.alerta ? '#fdf2f2' : '#f0fdf0',
+                                border: `1px solid ${info.alerta ? '#fca5a5' : '#86efac'}`,
+                                borderRadius:'10px',padding:'2px 8px',
+                              }}>
+                                {info.alerta ? '⚠ ' : '✓ '}{info.label}
+                              </div>
+                            )
+                          })()}
                         </div>
                         <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}}>
                           <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
