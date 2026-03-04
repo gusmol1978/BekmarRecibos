@@ -103,12 +103,16 @@ export default function Dashboard() {
   async function handleFirmar(recibo) {
     if (!firmaPass) { setFirmaMsg('Ingresá tu contraseña para firmar'); return }
     setFirmaLoading(true); setFirmaMsg('')
-    // Verificar identidad re-autenticando con la contraseña
-    const { error: authError } = await supabase.auth.signInWithPassword({ email: user.email, password: firmaPass })
+    // Verificar identidad con signInWithPassword y luego restaurar la sesion
+    const { data: signInData, error: authError } = await supabase.auth.signInWithPassword({ email: user.email, password: firmaPass })
     if (authError) {
       setFirmaMsg('Contraseña incorrecta. Intentá nuevamente.')
       setFirmaLoading(false)
       return
+    }
+    // Restaurar el token de sesion original para no romper el estado del usuario
+    if (signInData?.session) {
+      await supabase.auth.setSession({ access_token: signInData.session.access_token, refresh_token: signInData.session.refresh_token })
     }
     // Registrar la firma digital
     const { error } = await supabase.from('recibos').update({
