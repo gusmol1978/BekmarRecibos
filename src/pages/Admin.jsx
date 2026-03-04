@@ -92,8 +92,8 @@ export default function Admin() {
     const { data } = await supabase
       .from('recibos')
       .select('*, profiles!recibos_user_id_fkey(nombre_completo, email)')
-      .order('created_at', { ascending: false })
-      .limit(200)
+      .order('fecha', { ascending: false })
+      .limit(1000)
     setRecibos(data || [])
   }
 
